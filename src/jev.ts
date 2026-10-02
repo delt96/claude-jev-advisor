@@ -61,7 +61,7 @@ export async function callJev(request: JevRequest, opts: { key: string; fetchFn?
   exchange.catch(() => {});
   try {
     const { res, text } = await Promise.race([exchange, expired]);
-    if (!res.ok) return { error: redact(`HTTP ${res.status}: ${text.slice(0, 300)}`), requestId, ms: now() - started };
+    if (!res.ok) return { error: redact(`HTTP ${res.status}: ${text}`).slice(0, 300), requestId, ms: now() - started };
     const body = JSON.parse(text) as { model?: unknown; answers?: Record<string, { noul?: unknown } | null> };
     const answers: Record<string, number> = {};
     for (const [id, answer] of Object.entries(body.answers ?? {})) {

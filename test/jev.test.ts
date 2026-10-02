@@ -100,3 +100,11 @@ test('a fetch that ignores the abort and never settles still ends at the limit',
   assert.match(r.error, /did not answer within 50 ms/);
   assert.ok(Date.now() - started < 2000);
 });
+
+test('a key that straddles the 300-character cut of an error body is still blanked out', async () => {
+  const body = `${'x'.repeat(285)}ts-0123456789abcdef`;
+  const r = await callJev(REQUEST, { key: 'ts-0123456789abcdef', fetchFn: reply(401, body) });
+  assert.ok('error' in r);
+  assert.equal(r.error.includes('ts-0123'), false);
+  assert.ok(r.error.length <= 300);
+});

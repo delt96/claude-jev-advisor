@@ -4,6 +4,12 @@ import { parseState, type ContextState } from '../display/line.js';
 import { logDir, stateDir } from '../paths.js';
 
 const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/;
+const RENAME_ATTEMPTS = 3;
+const RETRYABLE_RENAME = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
 
 export function statePath(home: string, sessionId: string): string | null {
   return SAFE_SESSION_ID.test(sessionId) ? path.join(stateDir(home), `${sessionId}.json`) : null;
@@ -13,9 +19,23 @@ export function writeState(home: string, state: ContextState): void {
   const file = statePath(home, state.sessionId);
   if (!file) return;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.tmp`;
+  const temp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(state));
-  fs.renameSync(temp, file);
+  try {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        fs.renameSync(temp, file);
+        return;
+      } catch (err) {
+        // Windows briefly locks a file that another process (the mod, an antivirus) is reading; a short retry usually gets through.
+        if (attempt >= RENAME_ATTEMPTS || !RETRYABLE_RENAME.has((err as NodeJS.ErrnoException).code ?? '')) throw err;
+        pause(20 * attempt);
+      }
+    }
+  } catch (err) {
+    fs.rmSync(temp, { force: true });
+    throw err;
+  }
 }
 
 export function readState(home: string, sessionId: string): ContextState | null {

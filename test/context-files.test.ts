@@ -55,3 +55,10 @@ test('log records go to a monthly file, one JSON line each, with the time', () =
     { at: now.toISOString(), event: 'session_end' },
   ]);
 });
+
+test('a state that cannot be moved into place throws and leaves no temp file behind', () => {
+  const home = tempHome();
+  fs.mkdirSync(path.join(stateDir(home), 's1.json'), { recursive: true });
+  assert.throws(() => writeState(home, { sessionId: 's1', at: 1, size: 1, judgment: null }));
+  assert.deepEqual(fs.readdirSync(stateDir(home)).filter((name) => name.endsWith('.tmp')), []);
+});

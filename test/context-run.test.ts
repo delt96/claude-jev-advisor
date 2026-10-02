@@ -157,3 +157,14 @@ test('the entry exits 0 quietly on broken input and on an unknown event', () => 
     assert.equal(r.stdout, '', `${args.join(' ')} ${input}`);
   }
 });
+
+test('a state that cannot be saved still leaves the log line of the Jev call', async () => {
+  const home = setup();
+  fs.writeFileSync(path.join(dataDir(home), 'state'), 'not a folder');
+  const calls: string[] = [];
+  await runContextHook('stop', stop(transcript(home, 312000)), deps(home, jev(0.9, 0.9, calls)));
+  assert.equal(calls.length, 1);
+  const [log] = logLines(home);
+  assert.equal(log.reason, null);
+  assert.deepEqual(log.judgment, { phase: 'unit_done', clear: true });
+});

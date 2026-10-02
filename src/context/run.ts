@@ -61,7 +61,11 @@ export async function runContextHook(event: ContextEvent, raw: string, deps: Con
   }
   const at = deps.now();
   const state: ContextState = { sessionId, at: at.getTime(), size, judgment };
-  writeState(deps.home, state);
+  try {
+    writeState(deps.home, state);
+  } catch {
+    // A state that cannot be saved must not also lose the log line of a Jev call already made.
+  }
   appendLog(deps.home, at, { helper: 'context', event: 'stop', sessionId, transcriptPath, size, reason, judgment, jev });
   if (config.display !== 'message') return null;
   const line = adviceLine({ size, threshold: null, judgment, config });
