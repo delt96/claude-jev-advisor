@@ -2,6 +2,8 @@
 
 Unofficial helpers for [Claude Code](https://claude.com/claude-code), installed as command hooks in `~/.claude/settings.json`. They use [TypeSafe](https://typesafe.ai) Jev for judgments that need to understand the conversation.
 
+The `context` helper sends parts of your conversation to TypeSafe's Jev API (`api.typesafe.ai`): your last three requests, each cut to its first 1,000 characters, and Claude's last reply, cut to its first and last 1,500 characters. The `rm` helper sends nothing.
+
 Not affiliated with Anthropic or TypeSafe.
 
 | Helper | What it does | Systems |
@@ -37,7 +39,7 @@ claude-jev-advisor install --key-file C:/path/to/jev-key.env
 
 The key file holds a line `TYPESAFE_API_KEY=...`. Only its path is saved, never the key.
 
-`install` first copies `~/.claude/settings.json` to `~/.claude/backups/settings.json.<YYYY-MM-DD-HHmmss>-before-claude-jev-advisor`. If a backup from the same second already exists, it adds `-2`, `-3` and so on instead of overwriting it. It then adds or replaces only this package's entries. Running it again changes nothing.
+Before it changes `~/.claude/settings.json`, `install` copies it to `~/.claude/backups/settings.json.<YYYY-MM-DD-HHmmss>-before-claude-jev-advisor`. If a backup from the same second already exists, it adds `-2`, `-3` and so on instead of overwriting it. It then adds or replaces only this package's entries. Running it again changes nothing.
 
 New hooks and the display reach Claude Code sessions started after the install. Turning a helper on or off applies at once, even to open sessions.
 
@@ -60,7 +62,7 @@ When a turn ends, a `Stop` hook reads the size of the conversation from the sess
 - has the work asked for reached a natural stopping point?
 - is the goal behind it finished, with nothing left to do next?
 
-The answer is saved for the display. The hook never adds anything to the conversation, so Claude does not see it and it costs no Claude tokens.
+The answer is saved for the display. Nothing is added to what Claude sees, so it costs no Claude tokens. If Jev does not answer within 8 seconds, only the size is shown.
 
 | Situation | Shown |
 |---|---|
@@ -68,7 +70,8 @@ The answer is saved for the display. The hook never adds anything to the convers
 | Work in progress | `🟢 312k` |
 | Goal finished (from 100k) | `🟡 312k 새롭게 시작하는 건 어떠세요? /clear` |
 | Work unit finished (from 200k) | `🟡 312k 지금까지 정리하고 이어가는 건 어떠세요? /compact` |
-| Within 20% of auto-compact | `🔴 790k 18%`, followed by the advice when there is one |
+| Work unit finished, under 200k | `🟢 150k` |
+| Within 20% of auto-compact | `🔴 790k 18%`, then ` · ` and the `/clear` or `/compact` advice above, or `작업이 끝나면 정리하고 이어가는 건 어떠세요? /compact` while the work is still going |
 
 With `--lang en` the advice reads `Start fresh? /clear`, `Wrap up what you have and continue? /compact` and `When this work is done, wrap up and continue? /compact`.
 
@@ -139,7 +142,7 @@ Default config:
 }
 ```
 
-`minTokens` is where judging starts, `compactMinTokens` where `/compact` is suggested, `redRemainingPct` where the red zone starts, and `unitDoneYes` / `goalDoneYes` are the Jev probabilities needed for "unit finished" and "goal finished". The `rm.jev` settings are reserved for a later version.
+`minTokens` is where judging starts, `compactMinTokens` where `/compact` is suggested, `redRemainingPct` where the red zone starts, and `unitDoneYes` / `goalDoneYes` are the Jev probabilities needed for "unit finished" and "goal finished". The `rm` settings other than `enabled` are reserved for a later version.
 
 ## Development
 
