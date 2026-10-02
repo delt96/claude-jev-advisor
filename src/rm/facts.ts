@@ -30,7 +30,7 @@ export type TargetFacts = {
 export type Candidate = 'session' | 'ignored';
 
 const win = path.win32;
-const DELETING = /\b(?:rm|rmdir|del|erase|rd|ri|Remove-Item)\b/i;
+const DELETING = /\b(?:rm|rmdir|del|erase|rd|ri|Remove-Item|xargs)\b/i;
 const GIT_LOCATION_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -41,7 +41,7 @@ function callOf(tool: string, input: Record<string, unknown>, result: string | u
   const text = (key: string) => (typeof input[key] === 'string' ? (input[key] as string) : '');
   switch (tool) {
     case 'Write':
-      return { tool, file: text('file_path'), text: text('content'), kind: result === 'update' ? 'change' : 'create' };
+      return { tool, file: text('file_path'), text: text('content'), kind: result === 'create' ? 'create' : 'change' };
     case 'Edit':
       return { tool, file: text('file_path'), text: text('new_string'), kind: 'change' };
     case 'MultiEdit': {
@@ -101,11 +101,20 @@ export function readSessionLog(file: string, maxBytes = SESSION_LOG_MAX_BYTES): 
 function normalized(text: string): string {
   return text
     .replace(/\\/g, '/')
-    .replace(/(^|[\s"'=(])\/([A-Za-z])\//g, '$1$2:/')
+    .replace(/(^|[\s"'=(>])\/([A-Za-z])\//g, '$1$2:/')
     .toLowerCase();
 }
 
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function shellRefs(target: string, cwd: string | null): string[] {
+  const refs = [`(?<![\\w.-])${escaped(normalized(target))}(?![\\w.-])`];
+  const relative = cwd === null ? '' : win.relative(cwd, target);
+  if (relative && !relative.startsWith('..') && !win.isAbsolute(relative)) {
+    refs.push(`(?<![\\w.\\-/:])(?:\\./)?${escaped(normalized(relative))}(?![\\w.-])`);
+  }
+  return refs;
+}
 
 export function namesTarget(call: ToolCall, target: string, folder: boolean, cwd: string | null): boolean {
   const wanted = normalized(target);
@@ -116,11 +125,17 @@ export function namesTarget(call: ToolCall, target: string, folder: boolean, cwd
   // The rm being checked is already in the transcript, and an earlier delete is no sign that Claude made the file.
   if (DELETING.test(call.text)) return false;
   const text = normalized(call.text);
-  if (new RegExp(`(?<![\\w.-])${escaped(wanted)}(?![\\w.-])`).test(text)) return true;
-  if (cwd === null) return false;
-  const relative = win.relative(cwd, target);
-  if (!relative || relative.startsWith('..') || win.isAbsolute(relative)) return false;
-  return new RegExp(`(?<![\\w.\\-/:])(?:\\./)?${escaped(normalized(relative))}(?![\\w.-])`).test(text);
+  return shellRefs(target, cwd).some((ref) => new RegExp(ref).test(text));
+}
+
+export function createsTarget(call: ToolCall, target: string, cwd: string | null): boolean {
+  if (call.kind !== 'shell') return call.kind === 'create';
+  const text = normalized(call.text);
+  return shellRefs(target, cwd).some((ref) =>
+    [`(?<!>)>(?!>)\\s*["']?${ref}`, `\\b(?:touch|mkdir)\\b[^;&|]*?\\s["']?${ref}`, `(?:^|\\s)(?:-o|--out|--output)(?:=|\\s+)["']?${ref}`].some((form) =>
+      new RegExp(form).test(text),
+    ),
+  );
 }
 
 export function gatherFacts(target: string, cwd: string | null, session: SessionLog, probe: FactProbe, maxFiles: number): TargetFacts | null {
@@ -134,9 +149,9 @@ export function gatherFacts(target: string, cwd: string | null, session: Session
     listing: info.folder ? probe.list(target, maxFiles) : null,
     tracked: probe.tracked(target),
     ignored: info.folder && probe.ignored(target),
-    // Write and Edit replace a file, which resets its Windows birth time; the first call that named the target
-    // still shows whether it was already there.
-    existedBefore: naming.length > 0 && (naming[0].kind === 'change' || naming[0].kind === 'read'),
+    // Write, Edit and sed -i replace a file, which resets its Windows birth time, so the birth time alone cannot tell
+    // a new file from an edited one: the first call that named the target must be the one that visibly created it.
+    existedBefore: naming.length === 0 || !createsTarget(naming[0], target, cwd),
     createdBy: naming.length <= CALLS_PER_TARGET ? naming : [naming[0], ...naming.slice(1 - CALLS_PER_TARGET)],
   };
 }

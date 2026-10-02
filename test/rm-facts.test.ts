@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { candidateKind, gatherFacts, namesTarget, readSessionLog, realFactProbe, type CallKind, type FactProbe, type TargetFacts, type ToolCall } from '../src/rm/facts.js';
+import { candidateKind, createsTarget, gatherFacts, namesTarget, readSessionLog, realFactProbe, type CallKind, type FactProbe, type TargetFacts, type ToolCall } from '../src/rm/facts.js';
 
 const PROJECT = 'C:\\workspace\\app';
 const START = Date.parse('2026-10-03T01:00:00.000Z');
@@ -15,8 +15,8 @@ function useTool(name: string, input: object, extra: object = {}, id = 't') {
   return { type: 'assistant', isSidechain: false, timestamp: '2026-10-03T01:05:00.000Z', message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ok' }, { type: 'tool_use', id, name, input }] }, ...extra };
 }
 
-function toolResult(id: string, type: string) {
-  return { type: 'user', timestamp: '2026-10-03T01:05:01.000Z', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'done' }] }, toolUseResult: { type } };
+function toolResult(id: string, result: unknown) {
+  return { type: 'user', timestamp: '2026-10-03T01:05:01.000Z', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'done' }] }, toolUseResult: result };
 }
 
 test('the session log has the first timestamp and the main-chain calls that touch files, with what each did', () => {
@@ -25,13 +25,16 @@ test('the session log has the first timestamp and the main-chain calls that touc
     { type: 'last-prompt' },
     { type: 'user', timestamp: '2026-10-03T01:00:00.000Z', origin: { kind: 'human' }, message: { content: 'try it' } },
     useTool('Write', { file_path: 'C:\\workspace\\app\\probe.txt', content: 'hello' }, {}, 'w1'),
-    toolResult('w1', 'create'),
+    toolResult('w1', { type: 'create' }),
     useTool('Edit', { file_path: 'C:/workspace/app/a.ts', old_string: 'a', new_string: 'b' }, {}, 'e1'),
     useTool('MultiEdit', { file_path: 'C:/workspace/app/b.ts', edits: [{ new_string: 'one' }, { new_string: 'two' }] }, {}, 'm1'),
     useTool('Bash', { command: 'echo hi > out.json', description: 'Write output' }, {}, 'b1'),
     useTool('Read', { file_path: 'C:/workspace/app/c.ts' }, {}, 'r1'),
     useTool('Write', { file_path: 'C:/workspace/app/notes.md', content: 'n' }, {}, 'w2'),
-    toolResult('w2', 'update'),
+    toolResult('w2', { type: 'update' }),
+    useTool('Write', { file_path: 'C:/workspace/app/old.md', content: 'o' }, {}, 'w3'),
+    toolResult('w3', 'Error: File has not been read yet. Read it first before writing to it.'),
+    useTool('Write', { file_path: 'C:/workspace/app/pending.md', content: 'p' }, {}, 'w4'),
     useTool('Glob', { pattern: '*.ts' }, {}, 'g1'),
     useTool('Bash', { command: 'echo sub > sub.txt' }, { isSidechain: true }, 'b2'),
   ];
@@ -45,6 +48,8 @@ test('the session log has the first timestamp and the main-chain calls that touc
       { tool: 'Bash', file: null, text: 'echo hi > out.json', kind: 'shell' },
       { tool: 'Read', file: 'C:/workspace/app/c.ts', text: '', kind: 'read' },
       { tool: 'Write', file: 'C:/workspace/app/notes.md', text: 'n', kind: 'change' },
+      { tool: 'Write', file: 'C:/workspace/app/old.md', text: 'o', kind: 'change' },
+      { tool: 'Write', file: 'C:/workspace/app/pending.md', text: 'p', kind: 'change' },
     ],
   });
   assert.equal(readSessionLog(file, 100), null);
@@ -77,6 +82,7 @@ test('a delete command, in any spelling, is no sign of making the target', () =>
     'C:/msys64/usr/bin/rm.exe probe.txt',
     'echo done;/bin/rm probe.txt',
     'cmd /c del probe.txt',
+    "xargs -0 echo; r''m -f probe.txt",
   ]) {
     assert.equal(namesTarget(bash(command), target, false, PROJECT), false, command);
   }
@@ -126,16 +132,45 @@ test('gathered facts keep the first call that names the target and the last two,
   assert.equal(gatherFacts('C:\\gone', PROJECT, session, fakeProbe({ info: () => null }), 50), null);
 });
 
-test('a target whose first naming call edited, read or overwrote it was there before the session', () => {
+test('a shell command creates the target only by a redirect, touch, mkdir or an output option', () => {
+  const file = 'C:\\workspace\\app\\probe.txt';
+  const folder = 'C:\\workspace\\app\\tmp-check';
+  for (const [command, target, expected] of [
+    ['echo hi > probe.txt', file, true],
+    ['echo hi >probe.txt && cat probe.txt', file, true],
+    ['node export.mjs > "./probe.txt"', file, true],
+    ['node export.mjs 2> /c/workspace/app/probe.txt', file, true],
+    ['touch probe.txt', file, true],
+    ['curl -s -o probe.txt https://example.com', file, true],
+    ['mkdir tmp-check && node fetch.mjs', folder, true],
+    ['node fetch.mjs --out tmp-check', folder, true],
+    ['node fetch.mjs --output=tmp-check', folder, true],
+    ['echo more >> probe.txt', file, false],
+    ['cat probe.txt', file, false],
+    ["sed -i 's/a/b/' probe.txt", file, false],
+    ['echo hi > other/probe.txt', file, false],
+    ['cp notes.md probe.txt', file, false],
+  ] as const) {
+    assert.equal(createsTarget(bash(command), target, PROJECT), expected, command);
+  }
+  assert.equal(createsTarget(write(file), file, PROJECT), true);
+  assert.equal(createsTarget(write(file, 'x', 'change'), file, PROJECT), false);
+  assert.equal(createsTarget({ tool: 'Read', file, text: '', kind: 'read' }, file, PROJECT), false);
+});
+
+test('a target counts as made in this session only when the first call naming it visibly created it', () => {
   const target = 'C:\\workspace\\app\\probe.txt';
   const edit: ToolCall = { tool: 'Edit', file: target, text: 'b', kind: 'change' };
   const read: ToolCall = { tool: 'Read', file: target, text: '', kind: 'read' };
   const existed = (calls: ToolCall[]) => gatherFacts(target, PROJECT, { startedAt: START, calls }, fakeProbe(), 50)?.existedBefore;
+  assert.equal(existed([write(target), edit]), false);
+  assert.equal(existed([bash('echo hi > probe.txt'), edit]), false);
   assert.equal(existed([edit]), true);
   assert.equal(existed([read, write(target)]), true);
   assert.equal(existed([write(target, 'x', 'change')]), true);
-  assert.equal(existed([write(target), edit]), false);
-  assert.equal(existed([bash('echo hi > probe.txt'), edit]), false);
+  assert.equal(existed([bash('cat probe.txt'), read, edit]), true);
+  assert.equal(existed([bash("sed -i 's/a/b/' probe.txt")]), true);
+  assert.equal(existed([]), true);
   assert.equal(candidateKind(facts({ existedBefore: true }), START), null);
 });
 
