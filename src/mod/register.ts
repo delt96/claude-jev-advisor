@@ -39,7 +39,8 @@ async function autoCompactThreshold($: Engine): Promise<number | null> {
 
 async function liveSize($: Engine): Promise<number | null> {
   try {
-    return (await $.session.usage()).context.tokens ?? null;
+    const tokens = (await $.session.usage()).context.tokens;
+    return typeof tokens === 'number' && tokens > 0 ? tokens : null;
   } catch {
     return null;
   }
@@ -56,14 +57,14 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
   // A failing mod must never swallow Claude Code's events or blank its row: every hook calls next(e) outside its try.
   on('session.start', async ($, e, next) => {
     const result = await next(e);
-    if (!dataDir) return result;
+    if (!dataDir || e.isInteractive === false) return result;
     try {
       config = await loadConfig($, dataDir);
       threshold = await autoCompactThreshold($);
       $.clock.every(REFRESH_MS, () => {
-        Promise.all([loadConfig($, dataDir), loadState($, dataDir)])
-          .then(([nextConfig, nextState]) => {
-            const key = JSON.stringify([nextConfig, nextState]);
+        Promise.all([loadConfig($, dataDir), loadState($, dataDir), liveSize($)])
+          .then(([nextConfig, nextState, size]) => {
+            const key = JSON.stringify([nextConfig, nextState, size === null ? null : Math.round(size / 1000)]);
             if (key === seen) return;
             seen = key;
             if (nextConfig) config = nextConfig;

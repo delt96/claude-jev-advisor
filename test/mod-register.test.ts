@@ -66,8 +66,8 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
     setNow: (value: number) => {
       now = value;
     },
-    start: async () => {
-      await hooks.get('session.start')?.hook($, {}, async () => ({}));
+    start: async (event: object = {}) => {
+      await hooks.get('session.start')?.hook($, event, async () => ({}));
       await tick();
     },
     turnStart: async () => hooks.get('turn.start')?.hook($, {}, async () => 'engine'),
@@ -159,5 +159,29 @@ test('a config that cannot be read keeps the last good one', async () => {
   assert.equal(await h.tail(), undefined);
   delete files[CONFIG_FILE];
   await h.tick();
+  assert.equal(await h.tail(), undefined);
+});
+
+test('the row is redrawn when the shown size changes, so red appears during a turn', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG }, tokens: 700000, threshold: 967000 });
+  await h.start();
+  assert.equal(await h.tail(), '700k');
+  const before = h.invalidations();
+  h.live.tokens = 790000;
+  await h.tick();
+  assert.equal(h.invalidations(), before + 1);
+  assert.equal(await h.tail(), '🔴 790k 18%');
+});
+
+test('no size is shown before the first reply', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG }, tokens: 0, threshold: 967000 });
+  await h.start();
+  assert.equal(await h.tail(), undefined);
+});
+
+test('a headless session starts no poller and draws nothing', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG }, tokens: 312000, threshold: 967000 });
+  await h.start({ isInteractive: false });
+  assert.equal(h.invalidations(), 0);
   assert.equal(await h.tail(), undefined);
 });
