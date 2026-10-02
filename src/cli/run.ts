@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { Display, Lang } from '../config.js';
 import { FEATURES, isFeature, type Feature } from '../features.js';
 import { install, setEnabled, uninstall } from '../install.js';
@@ -82,7 +83,7 @@ export function runCli(argv: string[], io: CliIo): number {
           platform: io.platform,
           now: io.now(),
           lang: options.lang as Lang | undefined,
-          keyFile: options['key-file'],
+          keyFile: options['key-file'] === undefined || path.isAbsolute(options['key-file']) ? options['key-file'] : path.resolve(options['key-file']),
           display: options.display as Display | undefined,
         });
         for (const f of r.installed) io.out(`installed ${f}`);

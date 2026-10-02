@@ -3,7 +3,7 @@ import { updateConfig, type Display, type Lang } from './config.js';
 import { HOOK_SPECS, HOOK_TIMEOUT_SECONDS, LEGACY_RM_GUARD, SUPPORTED_PLATFORMS, ownScriptPattern, type Feature } from './features.js';
 import { backupsDir, settingsPath } from './paths.js';
 import { backupSettingsFile, readSettingsFile, writeSettingsFile } from './settings-file.js';
-import { findCommands, hookCommand, withHook, withoutCommands, type Settings } from './settings.js';
+import { commandMatches, findCommands, hookCommand, withHook, withoutCommands, type Settings } from './settings.js';
 
 export type InstallOptions = {
   home: string;
@@ -49,6 +49,11 @@ export function install(opts: InstallOptions): InstallResult {
     if (platforms && !platforms.includes(opts.platform)) {
       skipped.push({ feature, reason: `${feature} works on ${platforms.join(', ')} only` });
       continue;
+    }
+    for (const spec of HOOK_SPECS[feature]) {
+      if (!commandMatches(hookCommand(path.join(opts.distDir, spec.script)), ownScriptPattern(spec.script))) {
+        throw new Error(`cannot install from ${opts.distDir}: the hook path must contain claude-jev-advisor/dist/`);
+      }
     }
     next = withoutFeature(next, feature);
     if (feature === 'rm' && findCommands(next, LEGACY_RM_GUARD).length) {

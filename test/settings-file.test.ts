@@ -60,3 +60,16 @@ test('writeSettingsFile creates the folder and writes two-space JSON with a newl
   assert.equal(fs.readFileSync(file, 'utf8'), '{\n  "theme": "dark",\n  "hooks": {}\n}\n');
   assert.equal(fs.existsSync(`${file}.claude-jev-advisor.tmp`), false);
 });
+
+test('a failed rename leaves no temp file and the original content', () => {
+  const file = path.join(tempDir(), 'settings.json');
+  fs.writeFileSync(file, '{"a":1}');
+  fs.chmodSync(file, 0o444);
+  try {
+    assert.throws(() => writeSettingsFile(file, { b: 2 }));
+    assert.equal(fs.existsSync(`${file}.claude-jev-advisor.tmp`), false);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{"a":1}');
+  } finally {
+    fs.chmodSync(file, 0o666);
+  }
+});

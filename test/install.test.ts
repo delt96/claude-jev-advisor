@@ -152,3 +152,10 @@ test('install keeps a user empty group and an empty event', () => {
     },
   });
 });
+
+test('install refuses a dist folder whose path does not contain claude-jev-advisor/dist and writes nothing', () => {
+  const home = tempHome();
+  assert.throws(() => install(opts(home, { distDir: 'C:/x/other-name/dist' })), /cannot install from C:\/x\/other-name\/dist/);
+  assert.equal(fs.existsSync(settingsPath(home)), false);
+  assert.equal(fs.existsSync(backupsDir(home)), false);
+});

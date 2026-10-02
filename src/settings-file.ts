@@ -46,5 +46,12 @@ export function writeSettingsFile(file: string, settings: Settings): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.claude-jev-advisor.tmp`;
   fs.writeFileSync(temp, `${JSON.stringify(settings, null, 2)}\n`);
-  fs.renameSync(temp, file);
+  try {
+    fs.renameSync(temp, file);
+  } catch (err) {
+    try {
+      fs.unlinkSync(temp);
+    } catch {}
+    throw err;
+  }
 }

@@ -80,3 +80,8 @@ test('the bin entry runs status against HOME', () => {
   assert.match(r.stdout, /rm: not installed \(on\)/);
   assert.match(r.stdout, new RegExp(home.replace(/\\/g, '\\\\')));
 });
+
+test('a relative --key-file is stored as an absolute path', () => {
+  const r = cli(['install', 'rm', '--key-file', 'jev-key.env']);
+  assert.equal(readConfig(r.home).keyFile, path.resolve('jev-key.env'));
+});
