@@ -6,6 +6,7 @@ import { install, setEnabled, uninstall } from '../install.js';
 import { readJevKey } from '../jev.js';
 import { checkJevKey, promptForKey, saveJevKey, type KeyCheck, type KeyPrompt } from '../key.js';
 import { savedKeyPath } from '../paths.js';
+import { reportLines } from '../report.js';
 import { statusLines } from '../status.js';
 
 export type CliIo = {
@@ -30,6 +31,7 @@ const USAGE = [
   '  off [rm] [context]         switch helpers off (open sessions too)',
   '  status                     show what is registered and switched on',
   '  key                        ask for the TypeSafe API key, check it and save it',
+  '  report [--days 7]          list the /compact and /clear advice shown and what followed',
   '',
   'Options for install: --lang ko|en  --key-file <path>  --display mod|statusline|message',
   'The display is set up when context is installed: "install context --display <mode>" switches it.',
@@ -38,6 +40,7 @@ const USAGE = [
 ].join('\n');
 
 const INSTALL_OPTIONS = ['lang', 'key-file', 'display'];
+const REPORT_DAYS = 7;
 const LANGS = ['ko', 'en'];
 const DISPLAYS = ['mod', 'statusline', 'message'];
 
@@ -65,7 +68,12 @@ function parse(argv: string[]): Parsed | string {
 
 function checkOptions(command: string, options: Record<string, string>): string | null {
   const names = Object.keys(options);
-  if (command !== 'install') return names.length ? `options are only for install (got --${names[0]})` : null;
+  if (command === 'report') {
+    const unknown = names.find((n) => n !== 'days');
+    if (unknown) return `unknown option --${unknown}`;
+    return options.days === undefined || /^[1-9]\d{0,3}$/.test(options.days) ? null : '--days takes a whole number of days from 1';
+  }
+  if (command !== 'install') return names.length ? `options are only for install and report (got --${names[0]})` : null;
   const unknown = names.find((n) => !INSTALL_OPTIONS.includes(n));
   if (unknown) return `unknown option --${unknown}`;
   if (options.lang !== undefined && !LANGS.includes(options.lang)) return '--lang takes ko or en';
@@ -161,6 +169,9 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
         return 0;
       case 'status':
         for (const line of statusLines(io.home)) io.out(line);
+        return 0;
+      case 'report':
+        for (const line of reportLines(io.home, io.now(), options.days === undefined ? REPORT_DAYS : Number(options.days))) io.out(line);
         return 0;
       case 'help':
       case '--help':
