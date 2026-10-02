@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { readConfig, updateConfig, type Display, type Lang } from './config.js';
-import { applyStatusLineDisplay, withModDisplay, withoutModDisplay } from './display/settings.js';
+import { applyStatusLineDisplay, forgetStatusLineBefore, withModDisplay, withoutModDisplay } from './display/settings.js';
 import { HOOK_SPECS, HOOK_TIMEOUT_SECONDS, LEGACY_RM_GUARD, STATUSLINE_SCRIPT, SUPPORTED_PLATFORMS, ownScriptPattern, type Feature } from './features.js';
 import { backupsDir, dataDir, settingsPath } from './paths.js';
 import { backupSettingsFile, readSettingsFile, writeSettingsFile } from './settings-file.js';
@@ -81,6 +81,7 @@ export function install(opts: InstallOptions): InstallResult {
   const display = installed.includes('context') ? (opts.display ?? readConfig(opts.home).display) : null;
   if (display !== null) next = withDisplay(next, { home: opts.home, distDir: opts.distDir, display, delimiter });
   const backup = same(before, next) ? null : save(opts.home, next, opts.now);
+  forgetStatusLineBefore(opts.home, next);
   updateConfig(opts.home, (c) => ({
     ...c,
     lang: opts.lang ?? c.lang,
@@ -105,6 +106,7 @@ export function uninstall(opts: { home: string; features: Feature[]; now: Date; 
     next = after;
   }
   const backup = removed.length ? save(opts.home, next, opts.now) : null;
+  forgetStatusLineBefore(opts.home, next);
   return { settingsFile: file, backup, removed };
 }
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyStatusLineDisplay, isOurStatusLine, readStatusLineBefore, withModDisplay, withoutModDisplay } from '../src/display/settings.js';
+import { applyStatusLineDisplay, forgetStatusLineBefore, isOurStatusLine, readStatusLineBefore, withModDisplay, withoutModDisplay } from '../src/display/settings.js';
 import { statusLineBeforePath } from '../src/paths.js';
 import type { Settings } from '../src/settings.js';
 
@@ -37,7 +37,7 @@ test('removing with nothing of ours returns the same object, even with empty env
   assert.equal(withoutModDisplay(settings, ';'), settings);
 });
 
-test('the status line display saves the user line, and taking it out restores it', () => {
+test('the status line display saves the user line, taking it out restores it, and the saved copy goes only when asked', () => {
   const home = tempHome();
   const userLine = { type: 'command', command: 'bash ~/my-status.sh', padding: 1 };
   const on = applyStatusLineDisplay({ statusLine: userLine, theme: 'dark' }, home, OURS);
@@ -48,6 +48,10 @@ test('the status line display saves the user line, and taking it out restores it
   assert.deepEqual(readStatusLineBefore(home), userLine);
   const off = applyStatusLineDisplay(on, home, null);
   assert.deepEqual(off, { statusLine: userLine, theme: 'dark' });
+  assert.deepEqual(readStatusLineBefore(home), userLine);
+  forgetStatusLineBefore(home, on);
+  assert.deepEqual(readStatusLineBefore(home), userLine);
+  forgetStatusLineBefore(home, off);
   assert.equal(fs.existsSync(statusLineBeforePath(home)), false);
 });
 

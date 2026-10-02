@@ -85,6 +85,9 @@ export function applyStatusLineDisplay(settings: Settings, home: string, command
     return { ...settings, statusLine: { type: 'command', command, refreshInterval: STATUSLINE_REFRESH_SECONDS } };
   }
   if (!ours) return settings;
-  writeStatusLineBefore(home, null);
   return userLine ? { ...settings, statusLine: userLine } : withoutKey(settings, 'statusLine');
+}
+
+export function forgetStatusLineBefore(home: string, settings: Settings): void {
+  if (!isOurStatusLine(settings.statusLine)) writeStatusLineBefore(home, null);
 }

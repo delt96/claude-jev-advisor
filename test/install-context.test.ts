@@ -127,3 +127,21 @@ test('install switches context back on', () => {
   install(opts(home));
   assert.equal(readConfig(home).context.enabled, true);
 });
+
+test('a settings.json that cannot be saved does not lose the user status line', () => {
+  const home = tempHome();
+  const userLine = { type: 'command', command: 'bash ~/my-status.sh' };
+  writeSettings(home, { statusLine: userLine });
+  install(opts(home, { display: 'statusline' }));
+  fs.chmodSync(settingsPath(home), 0o444);
+  try {
+    assert.throws(() => install(opts(home, { display: 'mod' })));
+  } finally {
+    fs.chmodSync(settingsPath(home), 0o666);
+  }
+  assert.deepEqual(JSON.parse(fs.readFileSync(statusLineBeforePath(home), 'utf8')), userLine);
+  assert.match(readSettings(home).statusLine.command, /statusline\.js/);
+  install(opts(home, { display: 'mod' }));
+  assert.deepEqual(readSettings(home).statusLine, userLine);
+  assert.equal(fs.existsSync(statusLineBeforePath(home)), false);
+});
