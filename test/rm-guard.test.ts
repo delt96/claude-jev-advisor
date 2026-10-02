@@ -207,3 +207,14 @@ test('hookOutput wraps a decision for PreToolUse', () => {
   const out = JSON.parse(hookOutput({ decision: 'ask', reason: 'r' }));
   assert.deepEqual(out, { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'r' } });
 });
+
+test('an ask carries every real target, with a path only where one file or folder is meant', () => {
+  const r = run('rm -rf src/a.ts /opt/x "C:/workspace/proj/logs"/*.log', { exists: () => true });
+  assert.equal(r.result?.decision, 'ask');
+  assert.deepEqual(r.result?.targets, [
+    { shown: 'C:\\workspace\\proj\\src\\a.ts', path: 'C:\\workspace\\proj\\src\\a.ts' },
+    { shown: '/opt/x', path: null },
+    { shown: 'C:\\workspace\\proj\\logs\\*.log', path: null },
+  ]);
+  assert.equal(run('rm -rf $(echo x)').result?.targets, undefined);
+});

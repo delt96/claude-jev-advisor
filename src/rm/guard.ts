@@ -19,10 +19,11 @@ type Token = WordToken | { type: 'op'; value: string };
 type Command = { words: WordToken[]; after: string | null };
 type Vars = Map<string, string | null>;
 type Resolved = { path?: string; unknown?: string; unresolvable?: string };
-type Classified = { real?: string; unresolvable?: string };
+type Classified = { real?: RmTarget; unresolvable?: string };
 
 export type Probe = { exists(p: string): boolean; isIgnored(p: string): boolean };
-export type RmDecision = { decision: 'ask' | 'deny'; reason: string };
+export type RmTarget = { shown: string; path: string | null };
+export type RmDecision = { decision: 'ask' | 'deny'; reason: string; targets?: RmTarget[] };
 export type DecideInput = {
   command: string;
   cwd: string | null;
@@ -230,7 +231,7 @@ function classify(target: WordToken, ctx: Ctx): Classified {
   }
   const resolved = toWindowsPath(w, ctx.cwd, ctx.home, ctx.tmpdirs[0]);
   if (resolved.unresolvable) return { unresolvable: resolved.unresolvable };
-  if (resolved.unknown) return { real: target.value };
+  if (resolved.unknown) return { real: { shown: target.value, path: null } };
   const p = resolved.path!;
   const shown = pattern === null ? p : `${p}\\${pattern}`;
   const narrowPattern = pattern !== null && !/^[*?.]+$/.test(pattern);
@@ -238,7 +239,7 @@ function classify(target: WordToken, ctx: Ctx): Classified {
   if (segments(p).includes('.superpowers')) return {};
   if (pattern === null && !ctx.probe.exists(p)) return {};
   if (segments(p).some((s) => BUILD_DIRS.has(s)) && ctx.probe.isIgnored(p)) return {};
-  return { real: shown };
+  return { real: { shown, path: pattern === null ? p : null } };
 }
 
 function deny(why: string): RmDecision {
@@ -256,7 +257,7 @@ export function decide({ command, cwd, home, tmpdirs, env = {}, probe }: DecideI
   const setCwd = (next: string | null) => { ctx.cwd = next; vars.set('PWD', next); };
   setCwd(cwd);
   const stack: (string | null)[] = [];
-  const real: string[] = [];
+  const real: RmTarget[] = [];
   for (const { words, after } of commands) {
     const rest = stripPrefixes(words);
     if (!rest.length) {
@@ -292,9 +293,9 @@ export function decide({ command, cwd, home, tmpdirs, env = {}, probe }: DecideI
     if (after === ')' && stack.length) setCwd(stack.pop() ?? null);
   }
   if (!real.length) return null;
-  const listed = real.slice(0, MAX_LISTED).join(', ');
+  const listed = real.slice(0, MAX_LISTED).map((t) => t.shown).join(', ');
   const more = real.length > MAX_LISTED ? ` 외 ${real.length - MAX_LISTED}개` : '';
-  return { decision: 'ask', reason: `실제 파일 삭제: ${listed}${more}` };
+  return { decision: 'ask', reason: `실제 파일 삭제: ${listed}${more}`, targets: real };
 }
 
 export function hookOutput({ decision, reason }: RmDecision): string {
