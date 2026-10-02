@@ -17,9 +17,28 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --import ./test/isolate-home.ts --test --test-timeout=30000 \"test/**/*.test.ts\""
+    "test": "node --import tsx --import ./test/isolate-home.ts --test --test-timeout=30000 \"test/**/*.test.ts\"",
+    "prepack": "npm run build"
   },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "hooks",
+    "compact",
+    "context",
+    "typesafe",
+    "jev",
+    "rm"
+  ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/delt96/claude-jev-advisor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/delt96/claude-jev-advisor/issues"
+  },
+  "homepage": "https://github.com/delt96/claude-jev-advisor#readme",
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsup": "^8.0.0",

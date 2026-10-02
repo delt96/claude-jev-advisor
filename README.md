@@ -20,15 +20,8 @@ Not affiliated with Anthropic or TypeSafe.
 
 ## Install
 
-The package is not on npm yet. Install it from source:
-
 ```bash
-git clone https://github.com/delt96/claude-jev-advisor.git
-cd claude-jev-advisor
-npm ci
-npm run build
-npm pack
-npm i -g ./delt-claude-jev-advisor-0.1.0.tgz
+npm i -g @delt/claude-jev-advisor
 ```
 
 Then register the hooks:
@@ -41,7 +34,7 @@ The key file holds a line `TYPESAFE_API_KEY=...`. Only its path is saved, never 
 
 Before it changes `~/.claude/settings.json`, `install` copies it to `~/.claude/backups/settings.json.<YYYY-MM-DD-HHmmss>-before-claude-jev-advisor`. If a backup from the same second already exists, it adds `-2`, `-3` and so on instead of overwriting it. It then adds or replaces only this package's entries. Running it again changes nothing.
 
-New hooks and the display reach Claude Code sessions started after the install. Turning a helper on or off applies at once, even to open sessions.
+The hooks also reach Claude Code sessions that are already open; the bottom-row display starts with the next new session. Turning a helper on or off applies at once, even to open sessions.
 
 ## Commands
 
@@ -80,7 +73,7 @@ With `--lang en` the advice reads `Start fresh? /clear`, `Wrap up what you have 
 | `--display` | Where |
 |---|---|
 | `mod` (default) | At the end of the bottom row, after `⏵⏵ … mode on`. A small Claude Code mod in the package's `mod/` folder draws it. The mod is listed in `env.CLAUDE_CODE_PLUGIN_DIRS` and told the data folder through `pluginConfigs`. |
-| `statusline` | Claude Code's status line, the row above the bottom row. An existing status line of yours keeps running first, with our text after it, and is put back when you switch away or uninstall. No red zone, because the auto-compact threshold is not known there. |
+| `statusline` | Claude Code's status line, the row above the bottom row. An existing status line of yours keeps running first, with our text after it, and is put back when you switch away or uninstall. On Windows that command is run through `cmd.exe`, so a status line that needs bash may not show. No red zone, because the auto-compact threshold is not known there. |
 | `message` | A `Stop says: …` line in the transcript when there is advice. Claude does not see it. No red zone. |
 
 ## The rm helper
@@ -147,6 +140,8 @@ Default config:
 ## Development
 
 ```bash
+git clone https://github.com/delt96/claude-jev-advisor.git
+cd claude-jev-advisor
 npm ci
 npm test          # node:test via tsx; tests use temporary home folders and never call Jev
 npm run typecheck
