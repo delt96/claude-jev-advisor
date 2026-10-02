@@ -15,27 +15,27 @@ function deps(home: string): RmHookDeps {
   return { home, env: { TEMP: 'C:\\Temp' }, tmpdir: 'C:\\Temp', cwd: 'C:\\workspace\\proj', probe: { exists: () => true, isIgnored: () => false } };
 }
 
-test('a real file asks', () => {
-  const out = runRmHook(bash('rm src/a.ts'), deps(tempHome()));
+test('a real file asks', async () => {
+  const out = await runRmHook(bash('rm src/a.ts'), deps(tempHome()));
   assert.equal(JSON.parse(out!).hookSpecificOutput.permissionDecision, 'ask');
 });
 
-test('a temp file and other tools give no output', () => {
+test('a temp file and other tools give no output', async () => {
   const home = tempHome();
-  assert.equal(runRmHook(bash('rm -f C:/Temp/x.txt'), deps(home)), null);
-  assert.equal(runRmHook(JSON.stringify({ tool_name: 'Read', tool_input: { file_path: 'a' } }), deps(home)), null);
+  assert.equal(await runRmHook(bash('rm -f C:/Temp/x.txt'), deps(home)), null);
+  assert.equal(await runRmHook(JSON.stringify({ tool_name: 'Read', tool_input: { file_path: 'a' } }), deps(home)), null);
 });
 
-test('the input cwd is used, and the process cwd when it is missing', () => {
+test('the input cwd is used, and the process cwd when it is missing', async () => {
   const home = tempHome();
-  assert.match(runRmHook(bash('rm a.ts', 'D:\\other'), deps(home))!, /D:\\\\other\\\\a\.ts/);
-  assert.match(runRmHook(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'rm a.ts' } }), deps(home))!, /C:\\\\workspace\\\\proj\\\\a\.ts/);
+  assert.match((await runRmHook(bash('rm a.ts', 'D:\\other'), deps(home)))!, /D:\\\\other\\\\a\.ts/);
+  assert.match((await runRmHook(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'rm a.ts' } }), deps(home)))!, /C:\\\\workspace\\\\proj\\\\a\.ts/);
 });
 
-test('switched off, nothing is checked', () => {
+test('switched off, nothing is checked', async () => {
   const home = tempHome();
   writeConfig(home, { ...DEFAULT_CONFIG, rm: { ...DEFAULT_CONFIG.rm, enabled: false } });
-  assert.equal(runRmHook(bash('rm src/a.ts'), deps(home)), null);
+  assert.equal(await runRmHook(bash('rm src/a.ts'), deps(home)), null);
 });
 
 function runEntry(input: string, home: string) {
