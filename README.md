@@ -99,6 +99,20 @@ A target cannot be worked out when it uses:
 - a wildcard in a folder name
 - a `cd` to such a path earlier in the command
 
+It does not see deletions made any other way:
+
+- through the PowerShell tool (`Remove-Item` and its aliases). On Windows with Git Bash installed, Claude Code turns this tool on by default for claude.ai and Console accounts and uses PowerShell as its main shell, so many deletions go through it.
+- through a nested shell: `sh -c`, `bash -c`, `powershell -Command`, `pwsh -c`, `cmd /c del`
+- with other commands or programs, such as `find -delete`, `git clean` or a script that deletes files
+
+What its decisions do depends on Claude Code's permission mode:
+
+| Mode | `ask` | `deny` | No decision |
+|---|---|---|---|
+| `auto` | A prompt. The auto mode classifier can still block the call but cannot approve it on its own (Claude Code 2.1.211 or later). | Blocked | The classifier decides |
+| `bypassPermissions` | A prompt. Claude Code's documentation does not say this; it was seen in a test on 2026-10-03. | Blocked | Runs |
+| Other modes | A prompt (`dontAsk` refuses the call instead) | Blocked | Claude Code's normal permission handling |
+
 `install rm` also replaces an older personal hook at `~/.claude/hooks/rm-guard/rm-guard.mjs` if one is registered. Its files are left in place.
 
 If a hook of this package fails in any way, it prints nothing and exits 0, so it never blocks Claude Code.
