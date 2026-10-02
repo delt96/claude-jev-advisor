@@ -32,7 +32,6 @@ export function backupSettingsFile(file: string, dir: string, now: Date): string
 export function writeSettingsFile(file: string, settings: Settings): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.claude-jev-advisor.tmp`;
-  fs.writeFileSync(temp, `${JSON.stringify(settings, null, 2)}
-`);
+  fs.writeFileSync(temp, `${JSON.stringify(settings, null, 2)}\n`);
   fs.renameSync(temp, file);
 }

@@ -13,7 +13,7 @@ test('a missing settings file reads as an empty object', () => {
 
 test('a settings file with a UTF-8 BOM is read', () => {
   const file = path.join(tempDir(), 'settings.json');
-  fs.writeFileSync(file, String.fromCharCode(0xfeff) + '{"theme": "dark"}');
+  fs.writeFileSync(file, '\uFEFF{"theme": "dark"}');
   assert.deepEqual(readSettingsFile(file), { theme: 'dark' });
 });
 
