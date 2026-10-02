@@ -6,20 +6,26 @@ const REFRESH_MS = 2000;
 
 async function readJson($: Engine, file: string): Promise<unknown> {
   try {
-    return JSON.parse(String(await $.fs.read(file)).replace(/^\uFEFF/, ''));
+    const text = await $.fs.read(file);
+    return typeof text === 'string' ? JSON.parse(text.replace(/^\uFEFF/, '')) : undefined;
   } catch {
-    return null;
+    return undefined;
   }
 }
 
-async function loadConfig($: Engine, dataDir: string): Promise<Config> {
-  return normalizeConfig(await readJson($, `${dataDir}/config.json`));
+async function loadConfig($: Engine, dataDir: string): Promise<Config | null> {
+  const raw = await readJson($, `${dataDir}/config.json`);
+  return raw === undefined ? null : normalizeConfig(raw);
 }
 
 async function loadState($: Engine, dataDir: string): Promise<ContextState | null> {
-  const sessionId = await $.session.id();
-  const state = parseState(await readJson($, `${dataDir}/state/${sessionId}.json`));
-  return state && state.sessionId === sessionId ? state : null;
+  try {
+    const sessionId = await $.session.id();
+    const state = parseState(await readJson($, `${dataDir}/state/${sessionId}.json`));
+    return state && state.sessionId === sessionId ? state : null;
+  } catch {
+    return null;
+  }
 }
 
 async function autoCompactThreshold($: Engine): Promise<number | null> {
@@ -47,29 +53,34 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
   let turnStartedAt = 0;
   let seen = '';
 
+  // A failing mod must never swallow Claude Code's events or blank its row: every hook calls next(e) outside its try.
   on('session.start', async ($, e, next) => {
     const result = await next(e);
     if (!dataDir) return result;
-    config = await loadConfig($, dataDir);
-    threshold = await autoCompactThreshold($);
-    $.clock.every(REFRESH_MS, () => {
-      Promise.all([loadConfig($, dataDir), loadState($, dataDir)])
-        .then(([nextConfig, nextState]) => {
-          const key = JSON.stringify([nextConfig, nextState]);
-          if (key === seen) return;
-          seen = key;
-          config = nextConfig;
-          state = nextState;
-          $.ui.invalidate('ui.render');
-        })
-        .catch(() => {});
-    });
+    try {
+      config = await loadConfig($, dataDir);
+      threshold = await autoCompactThreshold($);
+      $.clock.every(REFRESH_MS, () => {
+        Promise.all([loadConfig($, dataDir), loadState($, dataDir)])
+          .then(([nextConfig, nextState]) => {
+            const key = JSON.stringify([nextConfig, nextState]);
+            if (key === seen) return;
+            seen = key;
+            if (nextConfig) config = nextConfig;
+            state = nextState;
+            $.ui.invalidate('ui.render');
+          })
+          .catch(() => {});
+      });
+    } catch {}
     return result;
   });
 
   on('turn.start', async ($, e, next) => {
-    turnStartedAt = await $.clock.now();
-    $.ui.invalidate('ui.render');
+    try {
+      turnStartedAt = await $.clock.now();
+      $.ui.invalidate('ui.render');
+    } catch {}
     return next(e);
   });
 
@@ -80,10 +91,16 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
   });
 
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    const current = config;
-    if (!current || !current.context.enabled || current.display !== 'mod') return next(e);
-    const size = await liveSize($);
-    const tail = adviceLine({ size, threshold, judgment: usableJudgment(state, size, turnStartedAt), config: current });
+    let tail = '';
+    try {
+      const current = config;
+      if (current && current.context.enabled && current.display === 'mod') {
+        const size = await liveSize($);
+        tail = adviceLine({ size, threshold, judgment: usableJudgment(state, size, turnStartedAt), config: current });
+      }
+    } catch {
+      tail = '';
+    }
     return tail ? next({ ...e, props: { ...e.props, tail } }) : next(e);
   });
 }

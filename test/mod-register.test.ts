@@ -4,39 +4,52 @@ import { DEFAULT_CONFIG, type Config } from '../src/config.js';
 import { register } from '../src/mod/register.js';
 
 type AnyFn = (...args: any[]) => any;
+type Fail = { usage?: boolean; now?: boolean; read?: 'throw' | 'object' };
 const CONFIG_FILE = 'D:/data/config.json';
 const STATE_FILE = 'D:/data/state/sess-1.json';
 const state = (at: number, size: number, judgment: object | null) => ({ sessionId: 'sess-1', at, size, judgment });
 
-function harness(opts: { dataDir?: string; files: Record<string, unknown>; tokens?: number; threshold?: number }) {
-  const hooks = new Map<string, AnyFn>();
+function harness(opts: { dataDir?: string; files: Record<string, unknown>; tokens?: number; threshold?: number; fail?: Fail }) {
+  const hooks = new Map<string, { matcher: unknown; hook: AnyFn }>();
   const on = (event: string, a: unknown, b?: unknown) => {
-    hooks.set(event, (b ?? a) as AnyFn);
+    hooks.set(event, b === undefined ? { matcher: null, hook: a as AnyFn } : { matcher: a, hook: b as AnyFn });
   };
   let timer = null as (() => void) | null;
   let now = 1000;
+  let invalidations = 0;
   const live = { tokens: opts.tokens };
+  const fail: Fail = opts.fail ?? {};
   const $ = {
     session: {
       id: async () => 'sess-1',
-      usage: async (args?: { breakdown?: string }) => ({
-        context: { tokens: live.tokens, window: 1000000, ...(args?.breakdown ? { breakdown: { autoCompactThreshold: opts.threshold } } : {}) },
-      }),
+      usage: async (args?: { breakdown?: string }) => {
+        if (fail.usage) throw new Error('usage failed');
+        return { context: { tokens: live.tokens, window: 1000000, ...(args?.breakdown ? { breakdown: { autoCompactThreshold: opts.threshold } } : {}) } };
+      },
     },
     fs: {
       read: async (file: string) => {
+        if (fail.read === 'throw') throw new Error('read failed');
+        if (fail.read === 'object') return { text: 'not a string' };
         if (file in opts.files) return JSON.stringify(opts.files[file]);
         throw new Error(`ENOENT ${file}`);
       },
     },
     clock: {
-      now: async () => now,
+      now: async () => {
+        if (fail.now) throw new Error('clock failed');
+        return now;
+      },
       every: (_ms: number, fn: () => void) => {
         timer = fn;
         return {};
       },
     },
-    ui: { invalidate: () => {} },
+    ui: {
+      invalidate: () => {
+        invalidations += 1;
+      },
+    },
   };
   register(on as never, { dataDir: opts.dataDir ?? 'D:/data' });
   const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -48,23 +61,28 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
   return {
     live,
     tick,
+    hooks,
+    invalidations: () => invalidations,
     setNow: (value: number) => {
       now = value;
     },
     start: async () => {
-      await hooks.get('session.start')?.($, {}, async () => ({}));
+      await hooks.get('session.start')?.hook($, {}, async () => ({}));
       await tick();
     },
-    turnStart: async () => {
-      await hooks.get('turn.start')?.($, {}, async () => ({}));
-    },
+    turnStart: async () => hooks.get('turn.start')?.hook($, {}, async () => 'engine'),
     tail: async (): Promise<string | undefined> => {
       const e = { props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } };
-      const out = await hooks.get('ui.render')?.($, e, async (next: typeof e) => next);
+      const out = await hooks.get('ui.render')?.hook($, e, async (next: typeof e) => next);
       return (out as { props: { tail?: string } }).props.tail;
     },
   };
 }
+
+test('the render hook targets the PromptHint row', () => {
+  const h = harness({ files: {} });
+  assert.deepEqual(h.hooks.get('ui.render')?.matcher, { component: 'PromptHint' });
+});
 
 test('the tail shows the saved judgment for this session', async () => {
   const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: state(900, 312000, { phase: 'unit_done', clear: true }) }, tokens: 312000, threshold: 967000 });
@@ -78,12 +96,24 @@ test('a new request hides the old judgment until a newer one is saved', async ()
   await h.start();
   assert.equal(await h.tail(), '🟡 312k 지금까지 정리하고 이어가는 건 어떠세요? /compact');
   h.setNow(5000);
-  await h.turnStart();
+  assert.equal(await h.turnStart(), 'engine');
   assert.equal(await h.tail(), '312k');
   files[STATE_FILE] = state(6000, 330000, { phase: 'working', clear: false });
   h.live.tokens = 330000;
   await h.tick();
   assert.equal(await h.tail(), '🟢 330k');
+});
+
+test('a redraw is asked for only when the config or the state changed', async () => {
+  const files: Record<string, unknown> = { [CONFIG_FILE]: DEFAULT_CONFIG };
+  const h = harness({ files, tokens: 312000, threshold: 967000 });
+  await h.start();
+  assert.equal(h.invalidations(), 1);
+  await h.tick();
+  assert.equal(h.invalidations(), 1);
+  files[STATE_FILE] = state(900, 312000, { phase: 'working', clear: false });
+  await h.tick();
+  assert.equal(h.invalidations(), 2);
 });
 
 test('near auto-compact the tail is red even without a judgment', async () => {
@@ -108,4 +138,26 @@ test('another display, a switched-off helper or no data folder leaves the row al
   const unset = harness({ dataDir: '', files: {}, tokens: 312000 });
   await unset.start();
   assert.equal(await unset.tail(), undefined);
+});
+
+test('failing APIs leave the engine row and events as they are', async () => {
+  const files = { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: state(900, 312000, { phase: 'unit_done', clear: true }) };
+  for (const fail of [{ usage: true }, { read: 'throw' as const }, { read: 'object' as const }]) {
+    const h = harness({ files, tokens: 312000, threshold: 967000, fail });
+    await h.start();
+    assert.equal(await h.tail(), undefined, JSON.stringify(fail));
+  }
+  const clock = harness({ files, tokens: 312000, threshold: 967000, fail: { now: true } });
+  await clock.start();
+  assert.equal(await clock.turnStart(), 'engine');
+});
+
+test('a config that cannot be read keeps the last good one', async () => {
+  const files: Record<string, unknown> = { [CONFIG_FILE]: { ...DEFAULT_CONFIG, display: 'statusline' } };
+  const h = harness({ files, tokens: 312000, threshold: 967000 });
+  await h.start();
+  assert.equal(await h.tail(), undefined);
+  delete files[CONFIG_FILE];
+  await h.tick();
+  assert.equal(await h.tail(), undefined);
 });
