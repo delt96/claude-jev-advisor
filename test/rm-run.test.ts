@@ -60,3 +60,15 @@ test('the entry stays silent and exits 0 on empty or broken input', () => {
     assert.equal(r.stdout, '', input);
   }
 });
+
+test('the entry decodes a multi-byte character split across stdin chunks', () => {
+  const build = (filler: number) => bash(`echo ${'a'.repeat(filler)}\nrm -rf "$(echo 한글)"`);
+  const base = Buffer.from(build(0), 'utf8').indexOf('한');
+  for (let offset = 65536 - 3; offset <= 65536 + 3; offset++) {
+    const input = build(offset - base);
+    assert.equal(Buffer.from(input, 'utf8').indexOf('한'), offset);
+    const r = runEntry(input, tempHome());
+    assert.equal(r.status, 0, `offset ${offset}`);
+    assert.match(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason, /한글/, `offset ${offset}`);
+  }
+});

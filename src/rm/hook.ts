@@ -4,6 +4,7 @@ import { runRmHook } from './run.js';
 
 async function main(): Promise<void> {
   let raw = '';
+  process.stdin.setEncoding('utf8');
   for await (const chunk of process.stdin) raw += chunk;
   const out = runRmHook(raw, { home: os.homedir(), env: process.env, tmpdir: os.tmpdir(), cwd: process.cwd(), probe: realProbe });
   if (out) process.stdout.write(out);
