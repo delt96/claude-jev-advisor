@@ -4,37 +4,47 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { candidateKind, gatherFacts, namesTarget, readSessionLog, realFactProbe, type FactProbe, type TargetFacts, type ToolCall } from '../src/rm/facts.js';
+import { candidateKind, gatherFacts, namesTarget, readSessionLog, realFactProbe, type CallKind, type FactProbe, type TargetFacts, type ToolCall } from '../src/rm/facts.js';
 
 const PROJECT = 'C:\\workspace\\app';
 const START = Date.parse('2026-10-03T01:00:00.000Z');
-const bash = (command: string): ToolCall => ({ tool: 'Bash', file: null, text: command });
-const write = (file: string, text = 'x'): ToolCall => ({ tool: 'Write', file, text });
+const bash = (command: string): ToolCall => ({ tool: 'Bash', file: null, text: command, kind: 'shell' });
+const write = (file: string, text = 'x', kind: CallKind = 'create'): ToolCall => ({ tool: 'Write', file, text, kind });
 
-function useTool(name: string, input: object, extra: object = {}) {
-  return { type: 'assistant', isSidechain: false, timestamp: '2026-10-03T01:05:00.000Z', message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ok' }, { type: 'tool_use', id: 't', name, input }] }, ...extra };
+function useTool(name: string, input: object, extra: object = {}, id = 't') {
+  return { type: 'assistant', isSidechain: false, timestamp: '2026-10-03T01:05:00.000Z', message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ok' }, { type: 'tool_use', id, name, input }] }, ...extra };
 }
 
-test('the session log has the first timestamp and the main-chain calls that can write files', () => {
+function toolResult(id: string, type: string) {
+  return { type: 'user', timestamp: '2026-10-03T01:05:01.000Z', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'done' }] }, toolUseResult: { type } };
+}
+
+test('the session log has the first timestamp and the main-chain calls that touch files, with what each did', () => {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cja-facts-')), 's.jsonl');
   const rows = [
     { type: 'last-prompt' },
     { type: 'user', timestamp: '2026-10-03T01:00:00.000Z', origin: { kind: 'human' }, message: { content: 'try it' } },
-    useTool('Write', { file_path: 'C:\\workspace\\app\\probe.txt', content: 'hello' }),
-    useTool('Edit', { file_path: 'C:/workspace/app/a.ts', old_string: 'a', new_string: 'b' }),
-    useTool('MultiEdit', { file_path: 'C:/workspace/app/b.ts', edits: [{ new_string: 'one' }, { new_string: 'two' }] }),
-    useTool('Bash', { command: 'echo hi > out.json', description: 'Write output' }),
-    useTool('Read', { file_path: 'C:/workspace/app/c.ts' }),
-    useTool('Bash', { command: 'echo sub > sub.txt' }, { isSidechain: true }),
+    useTool('Write', { file_path: 'C:\\workspace\\app\\probe.txt', content: 'hello' }, {}, 'w1'),
+    toolResult('w1', 'create'),
+    useTool('Edit', { file_path: 'C:/workspace/app/a.ts', old_string: 'a', new_string: 'b' }, {}, 'e1'),
+    useTool('MultiEdit', { file_path: 'C:/workspace/app/b.ts', edits: [{ new_string: 'one' }, { new_string: 'two' }] }, {}, 'm1'),
+    useTool('Bash', { command: 'echo hi > out.json', description: 'Write output' }, {}, 'b1'),
+    useTool('Read', { file_path: 'C:/workspace/app/c.ts' }, {}, 'r1'),
+    useTool('Write', { file_path: 'C:/workspace/app/notes.md', content: 'n' }, {}, 'w2'),
+    toolResult('w2', 'update'),
+    useTool('Glob', { pattern: '*.ts' }, {}, 'g1'),
+    useTool('Bash', { command: 'echo sub > sub.txt' }, { isSidechain: true }, 'b2'),
   ];
   fs.writeFileSync(file, `${rows.map((r) => JSON.stringify(r)).join('\n')}\nbroken line\n`);
   assert.deepEqual(readSessionLog(file), {
     startedAt: START,
     calls: [
-      { tool: 'Write', file: 'C:\\workspace\\app\\probe.txt', text: 'hello' },
-      { tool: 'Edit', file: 'C:/workspace/app/a.ts', text: 'b' },
-      { tool: 'MultiEdit', file: 'C:/workspace/app/b.ts', text: 'one\ntwo' },
-      { tool: 'Bash', file: null, text: 'echo hi > out.json' },
+      { tool: 'Write', file: 'C:\\workspace\\app\\probe.txt', text: 'hello', kind: 'create' },
+      { tool: 'Edit', file: 'C:/workspace/app/a.ts', text: 'b', kind: 'change' },
+      { tool: 'MultiEdit', file: 'C:/workspace/app/b.ts', text: 'one\ntwo', kind: 'change' },
+      { tool: 'Bash', file: null, text: 'echo hi > out.json', kind: 'shell' },
+      { tool: 'Read', file: 'C:/workspace/app/c.ts', text: '', kind: 'read' },
+      { tool: 'Write', file: 'C:/workspace/app/notes.md', text: 'n', kind: 'change' },
     ],
   });
   assert.equal(readSessionLog(file, 100), null);
@@ -54,11 +64,25 @@ test('a call names the target by its full path in any spelling, or relative to t
   assert.equal(namesTarget(bash('echo hi > probe.txt'), target, false, 'C:\\elsewhere'), false);
 });
 
-test('a delete command is no sign of making the target', () => {
+test('a delete command, in any spelling, is no sign of making the target', () => {
   const target = 'C:\\workspace\\app\\probe.txt';
-  assert.equal(namesTarget(bash('rm -f probe.txt'), target, false, PROJECT), false);
-  assert.equal(namesTarget(bash('ls && rm probe.txt'), target, false, PROJECT), false);
-  assert.equal(namesTarget({ tool: 'PowerShell', file: null, text: 'Remove-Item probe.txt' }, target, false, PROJECT), false);
+  for (const command of [
+    'rm -f probe.txt',
+    'ls && rm probe.txt',
+    '/usr/bin/rm -f probe.txt',
+    'rm.exe -f probe.txt',
+    '"rm" -f probe.txt',
+    '\\rm -f probe.txt',
+    "'rm' probe.txt",
+    'C:/msys64/usr/bin/rm.exe probe.txt',
+    'echo done;/bin/rm probe.txt',
+    'cmd /c del probe.txt',
+  ]) {
+    assert.equal(namesTarget(bash(command), target, false, PROJECT), false, command);
+  }
+  for (const command of ['Remove-Item probe.txt', 'ri probe.txt', 'del probe.txt']) {
+    assert.equal(namesTarget({ tool: 'PowerShell', file: null, text: command, kind: 'shell' }, target, false, PROJECT), false, command);
+  }
 });
 
 test('writing a file inside a folder names the folder', () => {
@@ -85,19 +109,34 @@ const facts = (over: Partial<TargetFacts> = {}): TargetFacts => ({
   listing: null,
   tracked: false,
   ignored: false,
+  existedBefore: false,
   createdBy: [bash('echo hi > probe.txt')],
   ...over,
 });
 
-test('gathered facts keep the last three calls that name the target, and ask git only what applies', () => {
+test('gathered facts keep the first call that names the target and the last two, and ask git only what applies', () => {
   const session = { startedAt: START, calls: [bash('echo 1 > probe.txt'), bash('echo 2 > probe.txt'), bash('ls'), bash('echo 3 > probe.txt'), bash('echo 4 >> probe.txt')] };
   const asked: string[] = [];
   const probe = fakeProbe({ ignored: (p) => (asked.push(p), true) });
   const f = gatherFacts('C:\\workspace\\app\\probe.txt', PROJECT, session, probe, 50);
-  assert.deepEqual(f?.createdBy.map((c) => c.text), ['echo 2 > probe.txt', 'echo 3 > probe.txt', 'echo 4 >> probe.txt']);
+  assert.deepEqual(f?.createdBy.map((c) => c.text), ['echo 1 > probe.txt', 'echo 3 > probe.txt', 'echo 4 >> probe.txt']);
   assert.equal(f?.ignored, false);
+  assert.equal(f?.existedBefore, false);
   assert.deepEqual(asked, []);
   assert.equal(gatherFacts('C:\\gone', PROJECT, session, fakeProbe({ info: () => null }), 50), null);
+});
+
+test('a target whose first naming call edited, read or overwrote it was there before the session', () => {
+  const target = 'C:\\workspace\\app\\probe.txt';
+  const edit: ToolCall = { tool: 'Edit', file: target, text: 'b', kind: 'change' };
+  const read: ToolCall = { tool: 'Read', file: target, text: '', kind: 'read' };
+  const existed = (calls: ToolCall[]) => gatherFacts(target, PROJECT, { startedAt: START, calls }, fakeProbe(), 50)?.existedBefore;
+  assert.equal(existed([edit]), true);
+  assert.equal(existed([read, write(target)]), true);
+  assert.equal(existed([write(target, 'x', 'change')]), true);
+  assert.equal(existed([write(target), edit]), false);
+  assert.equal(existed([bash('echo hi > probe.txt'), edit]), false);
+  assert.equal(candidateKind(facts({ existedBefore: true }), START), null);
 });
 
 test('a session test file must be untracked, named by a call of this session and made after it started', () => {
@@ -125,12 +164,13 @@ test('the real probe reads git, birth times and listings', { skip: process.platf
   const git = (...args: string[]) => spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
   git('init', '-q');
   fs.writeFileSync(path.join(repo, '.gitignore'), 'cache/\n');
-  fs.writeFileSync(path.join(repo, 'kept.txt'), 'k');
-  git('add', '.gitignore', 'kept.txt');
+  fs.writeFileSync(path.join(repo, 'Kept.txt'), 'k');
+  git('add', '.gitignore', 'Kept.txt');
   fs.writeFileSync(path.join(repo, 'probe.txt'), 'p');
   fs.mkdirSync(path.join(repo, 'cache', 'deep'), { recursive: true });
   for (const name of ['a', 'b', 'deep/c']) fs.writeFileSync(path.join(repo, 'cache', name), name);
-  assert.equal(realFactProbe.tracked(path.join(repo, 'kept.txt')), true);
+  assert.equal(realFactProbe.tracked(path.join(repo, 'Kept.txt')), true);
+  assert.equal(realFactProbe.tracked(path.join(repo, 'KEPT.TXT')), true);
   assert.equal(realFactProbe.tracked(path.join(repo, 'probe.txt')), false);
   assert.equal(realFactProbe.ignored(path.join(repo, 'cache')), true);
   assert.equal(realFactProbe.ignored(path.join(repo, 'probe.txt')), false);
@@ -142,4 +182,5 @@ test('the real probe reads git, birth times and listings', { skip: process.platf
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-facts-nogit-'));
   fs.writeFileSync(path.join(outside, 'x.txt'), 'x');
   assert.equal(realFactProbe.tracked(path.join(outside, 'x.txt')), false);
+  assert.equal(realFactProbe.tracked(path.join(outside, 'no-such-folder', 'x.txt')), true);
 });
