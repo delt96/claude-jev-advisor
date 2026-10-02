@@ -26,6 +26,7 @@ test('the key comes from TYPESAFE_API_KEY first, then the key file', () => {
   assert.equal(readJevKey({ TYPESAFE_API_KEY: 'ts-env-key' }, file), 'ts-env-key');
   assert.equal(readJevKey({}, file), 'ts-file-key');
   assert.equal(readJevKey({ TYPESAFE_API_KEY: '' }, file), 'ts-file-key');
+  assert.equal(readJevKey({ TYPESAFE_API_KEY: '   ' }, file), 'ts-file-key');
   assert.equal(readJevKey({}, null), null);
   assert.equal(readJevKey({}, path.join(dir, 'missing.env')), null);
   fs.writeFileSync(file, 'OTHER=1\n');
@@ -46,6 +47,20 @@ test('a good reply gives the noul probabilities, the model, the request id and t
   assert.deepEqual(JSON.parse(sent?.init.body ?? ''), { model: 'jev-latest', ...REQUEST });
 });
 
+test('odd reply shapes give the numbers that are there and never throw', async () => {
+  const cases: [string, Record<string, number>][] = [
+    ['{}', {}],
+    ['{"answers": null}', {}],
+    ['{"answers": {"q": null, "r": {"noul": "0.9"}, "s": {"noul": 0.4}}}', { s: 0.4 }],
+  ];
+  for (const [body, answers] of cases) {
+    const r = await callJev(REQUEST, { key: 'k', fetchFn: reply(200, body) });
+    assert.ok('answers' in r, body);
+    assert.deepEqual(r.answers, answers, body);
+  }
+  assert.ok('error' in (await callJev(REQUEST, { key: 'k', fetchFn: reply(200, 'null') })));
+});
+
 test('an HTTP error, a bad body and a failed fetch become errors that never contain the key', async () => {
   const http = await callJev(REQUEST, { key: 'ts-secret', fetchFn: reply(401, 'unauthorized', { 'x-request-id': 'req-2' }) });
   assert.ok('error' in http);
@@ -59,6 +74,12 @@ test('an HTTP error, a bad body and a failed fetch become errors that never cont
   for (const r of [http, bad, thrown]) assert.equal(JSON.stringify(r).includes('ts-secret'), false);
 });
 
+test('the key is blanked out of an error body that echoes it', async () => {
+  const r = await callJev(REQUEST, { key: 'ts-secret', fetchFn: reply(401, 'invalid key ts-secret') });
+  assert.ok('error' in r);
+  assert.equal(r.error, 'HTTP 401: invalid key [redacted]');
+});
+
 test('a reply slower than the time limit is cut off', async () => {
   const hanging: FetchFn = (_url, init) =>
     new Promise((_resolve, reject) => {
@@ -67,5 +88,15 @@ test('a reply slower than the time limit is cut off', async () => {
   const started = Date.now();
   const r = await callJev(REQUEST, { key: 'k', fetchFn: hanging, timeoutMs: 50 });
   assert.ok('error' in r);
+  assert.match(r.error, /did not answer within 50 ms/);
+  assert.ok(Date.now() - started < 2000);
+});
+
+test('a fetch that ignores the abort and never settles still ends at the limit', async () => {
+  const stuck: FetchFn = () => new Promise(() => {});
+  const started = Date.now();
+  const r = await callJev(REQUEST, { key: 'k', fetchFn: stuck, timeoutMs: 50 });
+  assert.ok('error' in r);
+  assert.match(r.error, /did not answer within 50 ms/);
   assert.ok(Date.now() - started < 2000);
 });

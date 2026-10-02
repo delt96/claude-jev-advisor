@@ -16,7 +16,8 @@ export type FetchFn = (
 const KEY_PREFIX = 'TYPESAFE_API_KEY=';
 
 export function readJevKey(env: Record<string, string | undefined>, keyFile: string | null): string | null {
-  if (env.TYPESAFE_API_KEY) return env.TYPESAFE_API_KEY;
+  const fromEnv = env.TYPESAFE_API_KEY?.trim();
+  if (fromEnv) return fromEnv;
   if (!keyFile) return null;
   let text: string;
   try {
@@ -33,12 +34,21 @@ export async function callJev(request: JevRequest, opts: { key: string; fetchFn?
   const now = opts.now ?? Date.now;
   const fetchFn = opts.fetchFn ?? (fetch as unknown as FetchFn);
   const limit = opts.timeoutMs ?? JEV_TIMEOUT_MS;
+  const redact = (text: string) => text.split(opts.key).join('[redacted]');
   const started = now();
   const controller = new AbortController();
-  // Unlike AbortSignal.timeout, this timer keeps the hook process alive until Jev answers or the limit passes.
-  const timer = setTimeout(() => controller.abort(new Error(`Jev did not answer within ${limit} ms`)), limit);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    // Unlike AbortSignal.timeout, this timer keeps the hook process alive until Jev answers or the limit passes,
+    // and the race below ends the call even when a fetch ignores the abort.
+    timer = setTimeout(() => {
+      const err = new Error(`Jev did not answer within ${limit} ms`);
+      controller.abort(err);
+      reject(err);
+    }, limit);
+  });
   let requestId: string | null = null;
-  try {
+  const exchange = (async () => {
     const res = await fetchFn(JEV_URL, {
       method: 'POST',
       headers: { Authorization: `Bearer ${opts.key}`, 'Content-Type': 'application/json' },
@@ -46,8 +56,12 @@ export async function callJev(request: JevRequest, opts: { key: string; fetchFn?
       signal: controller.signal,
     });
     requestId = res.headers.get('request-id') ?? res.headers.get('x-request-id');
-    const text = await res.text();
-    if (!res.ok) return { error: `HTTP ${res.status}: ${text.slice(0, 300)}`, requestId, ms: now() - started };
+    return { res, text: await res.text() };
+  })();
+  exchange.catch(() => {});
+  try {
+    const { res, text } = await Promise.race([exchange, expired]);
+    if (!res.ok) return { error: redact(`HTTP ${res.status}: ${text.slice(0, 300)}`), requestId, ms: now() - started };
     const body = JSON.parse(text) as { model?: unknown; answers?: Record<string, { noul?: unknown } | null> };
     const answers: Record<string, number> = {};
     for (const [id, answer] of Object.entries(body.answers ?? {})) {
@@ -55,7 +69,7 @@ export async function callJev(request: JevRequest, opts: { key: string; fetchFn?
     }
     return { answers, model: typeof body.model === 'string' ? body.model : null, requestId, ms: now() - started };
   } catch (err) {
-    return { error: String((err as Error)?.message ?? err).slice(0, 300), requestId, ms: now() - started };
+    return { error: redact(String((err as Error)?.message ?? err)).slice(0, 300), requestId, ms: now() - started };
   } finally {
     clearTimeout(timer);
   }
