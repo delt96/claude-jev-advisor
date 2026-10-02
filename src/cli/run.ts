@@ -17,13 +17,14 @@ const USAGE = [
   'Usage: claude-jev-advisor <command> [helpers] [options]',
   '',
   'Commands:',
-  '  install [rm]     register hooks in ~/.claude/settings.json (backs it up first)',
-  '  uninstall [rm]   remove this package\'s hooks from ~/.claude/settings.json',
-  '  on [rm]          switch helpers on (open sessions too)',
-  '  off [rm]         switch helpers off (open sessions too)',
-  '  status           show what is registered and switched on',
+  '  install [rm] [context]     register hooks in ~/.claude/settings.json (backs it up first)',
+  '  uninstall [rm] [context]   remove this package\'s hooks and display from ~/.claude/settings.json',
+  '  on [rm] [context]          switch helpers on (open sessions too)',
+  '  off [rm] [context]         switch helpers off (open sessions too)',
+  '  status                     show what is registered and switched on',
   '',
   'Options for install: --lang ko|en  --key-file <path>  --display mod|statusline|message',
+  'The display is set up when context is installed: "install context --display <mode>" switches it.',
   'Leaving out the helpers means all of them.',
   'Run "claude-jev-advisor uninstall" before "npm rm -g": npm does not run uninstall scripts.',
 ].join('\n');
@@ -89,6 +90,7 @@ export function runCli(argv: string[], io: CliIo): number {
         for (const f of r.installed) io.out(`installed ${f}`);
         for (const s of r.skipped) io.out(`skipped ${s.feature}: ${s.reason}`);
         if (r.replacedLegacyRmGuard) io.out('replaced the legacy rm-guard hook (its files under ~/.claude/hooks/rm-guard were left in place)');
+        if (r.display) io.out(`display: ${r.display}`);
         if (r.backup) io.out(`backup: ${r.backup}`);
         if (r.installed.length) io.out('Hooks apply to Claude Code sessions started from now on.');
         return 0;
