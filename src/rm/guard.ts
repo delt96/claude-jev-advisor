@@ -34,7 +34,7 @@ export type DecideInput = {
 };
 type Ctx = { cwd: string | null; home: string; tmpdirs: string[]; probe: Probe; vars: Vars };
 
-function stripHeredocs(text: string): string {
+export function stripHeredocs(text: string): string {
   const out: string[] = [];
   const pending: { dash: boolean; word: string }[] = [];
   for (const line of text.split('\n')) {

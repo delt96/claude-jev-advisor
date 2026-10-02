@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parseLines, type Entry } from '../context/transcript.js';
+import { stripHeredocs } from './guard.js';
 
 export const SESSION_LOG_MAX_BYTES = 32 * 1024 * 1024;
 export const CALLS_PER_TARGET = 3;
@@ -128,14 +129,79 @@ export function namesTarget(call: ToolCall, target: string, folder: boolean, cwd
   return shellRefs(target, cwd).some((ref) => new RegExp(ref).test(text));
 }
 
+type ShellCommand = { words: string[]; writes: string[] };
+
+function shellCommands(text: string): ShellCommand[] {
+  const commands: ShellCommand[] = [];
+  let current: ShellCommand = { words: [], writes: [] };
+  let word: string | null = null;
+  let redirect: string | null = null;
+  const endWord = () => {
+    if (word === null) return;
+    if (redirect === null) current.words.push(word);
+    else if (redirect === '>' || redirect === '&>') current.writes.push(word);
+    word = null;
+    redirect = null;
+  };
+  const endCommand = () => {
+    endWord();
+    commands.push(current);
+    current = { words: [], writes: [] };
+  };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "'" || c === '"') {
+      const close = text.indexOf(c, i + 1);
+      const stop = close === -1 ? text.length : close;
+      word = (word ?? '') + text.slice(i + 1, stop);
+      i = stop;
+    } else if (c === '\\') {
+      word = (word ?? '') + (text[i + 1] ?? '');
+      i += 1;
+    } else if (c === ' ' || c === '\t' || c === '\r') {
+      endWord();
+    } else if (c === '\n' || c === ';' || c === '|' || c === '(' || c === ')' || (c === '&' && text[i + 1] !== '>')) {
+      endCommand();
+    } else if (c === '>' || c === '<' || c === '&') {
+      if (word !== null && /^\d+$/.test(word)) word = null;
+      endWord();
+      let op = c;
+      while (text[i + 1] === '>' || text[i + 1] === '&' || text[i + 1] === '|') op += text[++i];
+      redirect = op;
+    } else {
+      word = (word ?? '') + c;
+    }
+  }
+  endCommand();
+  return commands;
+}
+
+const pathWord = (word: string) =>
+  word
+    .replace(/\\/g, '/')
+    .replace(/^\/([A-Za-z])\//, '$1:/')
+    .replace(/^\.\//, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+
 export function createsTarget(call: ToolCall, target: string, cwd: string | null): boolean {
   if (call.kind !== 'shell') return call.kind === 'create';
-  const text = normalized(call.text);
-  return shellRefs(target, cwd).some((ref) =>
-    [`(?<!>)>(?!>)\\s*["']?${ref}`, `\\b(?:touch|mkdir)\\b[^;&|]*?\\s["']?${ref}`, `(?:^|\\s)(?:-o|--out|--output)(?:=|\\s+)["']?${ref}`].some((form) =>
-      new RegExp(form).test(text),
-    ),
-  );
+  const full = pathWord(target);
+  const relative = cwd === null ? '' : win.relative(cwd, target);
+  const short = relative && !relative.startsWith('..') && !win.isAbsolute(relative) ? pathWord(relative) : null;
+  let moved = false;
+  // Only steps that visibly make the target count; after a cd, a relative name may mean another file.
+  const isTarget = (word: string | undefined) => word !== undefined && (pathWord(word) === full || (!moved && pathWord(word) === short));
+  for (const { words, writes } of shellCommands(stripHeredocs(call.text))) {
+    if (writes.some(isTarget)) return true;
+    const start = words.findIndex((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
+    const args = start === -1 ? [] : words.slice(start);
+    const name = win.basename((args[0] ?? '').replace(/\//g, '\\')).replace(/\.exe$/i, '').toLowerCase();
+    if ((name === 'touch' || name === 'mkdir') && args.slice(1).some(isTarget)) return true;
+    if (name === 'curl' && args.some((w, i) => (w === '-o' || w === '--output') && isTarget(args[i + 1]))) return true;
+    if (name === 'cd' || name === 'pushd' || name === 'popd') moved = true;
+  }
+  return false;
 }
 
 export function gatherFacts(target: string, cwd: string | null, session: SessionLog, probe: FactProbe, maxFiles: number): TargetFacts | null {

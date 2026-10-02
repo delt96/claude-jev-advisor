@@ -132,7 +132,7 @@ test('gathered facts keep the first call that names the target and the last two,
   assert.equal(gatherFacts('C:\\gone', PROJECT, session, fakeProbe({ info: () => null }), 50), null);
 });
 
-test('a shell command creates the target only by a redirect, touch, mkdir or an output option', () => {
+test('a shell command creates the target only by a redirect, touch, mkdir or curl -o', () => {
   const file = 'C:\\workspace\\app\\probe.txt';
   const folder = 'C:\\workspace\\app\\tmp-check';
   for (const [command, target, expected] of [
@@ -140,16 +140,34 @@ test('a shell command creates the target only by a redirect, touch, mkdir or an 
     ['echo hi >probe.txt && cat probe.txt', file, true],
     ['node export.mjs > "./probe.txt"', file, true],
     ['node export.mjs 2> /c/workspace/app/probe.txt', file, true],
+    ['npm test &> probe.txt', file, true],
+    ['cat <<EOF > probe.txt\nhello > other.txt\nEOF', file, true],
     ['touch probe.txt', file, true],
+    ['FOO=1 /usr/bin/touch.exe probe.txt', file, true],
     ['curl -s -o probe.txt https://example.com', file, true],
     ['mkdir tmp-check && node fetch.mjs', folder, true],
-    ['node fetch.mjs --out tmp-check', folder, true],
-    ['node fetch.mjs --output=tmp-check', folder, true],
+    ['cd sub && echo hi > C:/workspace/app/probe.txt', file, true],
+    ['node fetch.mjs --out tmp-check', folder, false],
     ['echo more >> probe.txt', file, false],
+    ['echo hi >| probe.txt', file, false],
+    ['npm test > out.log 2>&1 && cat probe.txt', file, false],
     ['cat probe.txt', file, false],
     ["sed -i 's/a/b/' probe.txt", file, false],
     ['echo hi > other/probe.txt', file, false],
+    ['echo hi > my-probe.txt', file, false],
     ['cp notes.md probe.txt', file, false],
+    ["mkdir -p backup\nsed -i 's/old/new/' probe.txt", file, false],
+    ["touch .done\nsed -i 's/old/new/' probe.txt", file, false],
+    ["# touch up wording\nsed -i 's/old/new/' probe.txt", file, false],
+    ["sed -i 's/x/y/' src/apple-touch-icon.svg probe.txt", file, false],
+    ["perl -pi -e 's/a/b/' scripts/mkdir.js probe.txt", file, false],
+    ['echo "save it with > probe.txt"', file, false],
+    ['git commit -m "redirect > probe.txt"', file, false],
+    ['cat <<EOF > other.txt\nhello > probe.txt\nEOF', file, false],
+    ['ls -o probe.txt', file, false],
+    ['unzip -o probe.txt', file, false],
+    ['python -O probe.txt', file, false],
+    ['cd docs && echo hi > probe.txt', file, false],
   ] as const) {
     assert.equal(createsTarget(bash(command), target, PROJECT), expected, command);
   }
