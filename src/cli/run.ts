@@ -1,7 +1,11 @@
+import fs from 'node:fs';
 import path from 'node:path';
-import type { Display, Lang } from '../config.js';
+import { readConfig, updateConfig, type Display, type Lang } from '../config.js';
 import { FEATURES, isFeature, type Feature } from '../features.js';
 import { install, setEnabled, uninstall } from '../install.js';
+import { readJevKey } from '../jev.js';
+import { checkJevKey, promptForKey, saveJevKey, type KeyCheck, type KeyPrompt } from '../key.js';
+import { savedKeyPath } from '../paths.js';
 import { statusLines } from '../status.js';
 
 export type CliIo = {
@@ -11,6 +15,9 @@ export type CliIo = {
   now: () => Date;
   out: (line: string) => void;
   err: (line: string) => void;
+  env?: Record<string, string | undefined>;
+  prompt?: KeyPrompt;
+  checkKey?: (key: string) => Promise<KeyCheck>;
 };
 
 const USAGE = [
@@ -22,6 +29,7 @@ const USAGE = [
   '  on [rm] [context]          switch helpers on (open sessions too)',
   '  off [rm] [context]         switch helpers off (open sessions too)',
   '  status                     show what is registered and switched on',
+  '  key                        ask for the TypeSafe API key, check it and save it',
   '',
   'Options for install: --lang ko|en  --key-file <path>  --display mod|statusline|message',
   'The display is set up when context is installed: "install context --display <mode>" switches it.',
@@ -65,7 +73,28 @@ function checkOptions(command: string, options: Record<string, string>): string 
   return null;
 }
 
-export function runCli(argv: string[], io: CliIo): number {
+async function askAndSaveKey(io: CliIo, prompt: KeyPrompt): Promise<boolean> {
+  const key = await promptForKey(prompt, io.checkKey ?? ((candidate) => checkJevKey(candidate)));
+  if (!key) {
+    io.out('No key saved. Run "claude-jev-advisor key" to add one later.');
+    return false;
+  }
+  const file = saveJevKey(io.home, key);
+  updateConfig(io.home, (c) => ({ ...c, keyFile: file }));
+  io.out(`Saved the key to ${file}`);
+  return true;
+}
+
+async function ensureKey(io: CliIo): Promise<void> {
+  if (readJevKey(io.env ?? process.env, readConfig(io.home).keyFile)) return;
+  if (!io.prompt) {
+    io.out('No TypeSafe API key yet: run "claude-jev-advisor key" in a terminal to add one (context needs it to judge).');
+    return;
+  }
+  await askAndSaveKey(io, io.prompt);
+}
+
+export async function runCli(argv: string[], io: CliIo): Promise<number> {
   const parsed = parse(argv);
   const problem = typeof parsed === 'string' ? parsed : checkOptions(parsed.command, parsed.options);
   if (typeof parsed === 'string' || problem) {
@@ -92,7 +121,8 @@ export function runCli(argv: string[], io: CliIo): number {
         if (r.replacedLegacyRmGuard) io.out('replaced the legacy rm-guard hook (its files under ~/.claude/hooks/rm-guard were left in place)');
         if (r.display) io.out(`display: ${r.display}`);
         if (r.backup) io.out(`backup: ${r.backup}`);
-        if (r.installed.length) io.out('Hooks apply to Claude Code sessions started from now on.');
+        if (r.installed.length) io.out('Hooks apply right away, also in open Claude Code sessions; the bottom-row display starts with the next new session.');
+        if (r.installed.includes('context')) await ensureKey(io);
         return 0;
       }
       case 'uninstall': {
@@ -100,6 +130,15 @@ export function runCli(argv: string[], io: CliIo): number {
         if (!r.removed.length) io.out('nothing to remove');
         for (const f of r.removed) io.out(`removed ${f}`);
         if (r.backup) io.out(`backup: ${r.backup}`);
+        if (r.removed.includes('context') && fs.existsSync(savedKeyPath(io.home))) io.out(`kept your saved TypeSafe key at ${savedKeyPath(io.home)}`);
+        return 0;
+      }
+      case 'key': {
+        if (!io.prompt) {
+          io.err('claude-jev-advisor key needs an interactive terminal (or set TYPESAFE_API_KEY, or use install --key-file).');
+          return 1;
+        }
+        await askAndSaveKey(io, io.prompt);
         return 0;
       }
       case 'on':

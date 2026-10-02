@@ -27,10 +27,10 @@ npm i -g @delt/claude-jev-advisor
 Then register the hooks:
 
 ```bash
-claude-jev-advisor install --key-file C:/path/to/jev-key.env
+claude-jev-advisor install
 ```
 
-The key file holds a line `TYPESAFE_API_KEY=...`. Only its path is saved, never the key.
+When the context helper is installed and no key is found, `install` asks for your TypeSafe API key. What you type is hidden. It checks the key with one small Jev call and saves it to `~/.claude/claude-jev-advisor/jev-key.env`. Press Enter to skip; `claude-jev-advisor key` asks again later. Instead of typing it, you can set `TYPESAFE_API_KEY`, or pass `--key-file <path>` to a file holding a line `TYPESAFE_API_KEY=...` (then only that path is saved). The key is never printed or logged.
 
 Before it changes `~/.claude/settings.json`, `install` copies it to `~/.claude/backups/settings.json.<YYYY-MM-DD-HHmmss>-before-claude-jev-advisor`. If a backup from the same second already exists, it adds `-2`, `-3` and so on instead of overwriting it. It then adds or replaces only this package's entries. Running it again changes nothing.
 
@@ -44,6 +44,7 @@ The hooks also reach Claude Code sessions that are already open; the bottom-row 
 | `claude-jev-advisor uninstall [rm] [context]` | Removes this package's hooks and display from `settings.json` |
 | `claude-jev-advisor on [rm] [context]` / `off [rm] [context]` | Switches helpers on or off without touching `settings.json` |
 | `claude-jev-advisor status` | Shows what is registered and on, the display, whether a key is set, the thresholds and the last judgment |
+| `claude-jev-advisor key` | Asks for the TypeSafe API key, checks it and saves it (needs an interactive terminal) |
 | `claude-jev-advisor help` | Prints the usage |
 
 If you leave out the helper names, the command applies to all helpers. The display is set up when `context` is installed; run `claude-jev-advisor install context --display <mode>` to switch it.
@@ -113,6 +114,8 @@ npm rm -g @delt/claude-jev-advisor
 
 If the package is removed first, the hook entries point to a missing file. Claude Code keeps running, but the helpers are off. To clean up, reinstall the package and run `claude-jev-advisor uninstall`, or delete the entries from `settings.json` by hand.
 
+A key saved by `install` or `key` stays in `~/.claude/claude-jev-advisor/jev-key.env`; delete that file if you no longer need it.
+
 ## Files
 
 | Path | Contents |
@@ -121,6 +124,7 @@ If the package is removed first, the hook entries point to a missing file. Claud
 | `~/.claude/claude-jev-advisor/state/<session>.json` | The last judgment of each open session, read by the display. Removed when the session ends. |
 | `~/.claude/claude-jev-advisor/log/YYYY-MM.jsonl` | One line per judgment: the size, what was sent to Jev (parts of your conversation), the answers and the result. Never the key. |
 | `~/.claude/claude-jev-advisor/statusline-before.json` | Your own status line while `--display statusline` is in use |
+| `~/.claude/claude-jev-advisor/jev-key.env` | Your TypeSafe API key, when you typed it in `install` or `key` |
 | `~/.claude/backups/settings.json.*-before-claude-jev-advisor` | Copies of `settings.json` from before each change |
 
 Default config:
