@@ -5,3 +5,6 @@ export const dataDir = (home: string) => path.join(claudeDir(home), 'claude-jev-
 export const configPath = (home: string) => path.join(dataDir(home), 'config.json');
 export const settingsPath = (home: string) => path.join(claudeDir(home), 'settings.json');
 export const backupsDir = (home: string) => path.join(claudeDir(home), 'backups');
+export const stateDir = (home: string) => path.join(dataDir(home), 'state');
+export const logDir = (home: string) => path.join(dataDir(home), 'log');
+export const statusLineBeforePath = (home: string) => path.join(dataDir(home), 'statusline-before.json');
