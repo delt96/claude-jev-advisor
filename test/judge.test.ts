@@ -15,32 +15,34 @@ test('the request carries the requests, the cut reply and both questions in Engl
   assert.deepEqual(Object.keys(request.state), ['recent_requests', 'last_assistant_reply']);
   assert.deepEqual(request.state.recent_requests, ['r1'.repeat(500), 'r2', 'r3']);
   assert.equal((request.state.last_assistant_reply as string).length, 3003);
-  assert.deepEqual(Object.keys(request.questions), ['unit_done', 'goal_done']);
+  assert.deepEqual(Object.keys(request.questions), ['unit_done', 'phase_done']);
   for (const q of Object.values(request.questions)) {
     assert.equal(q.type, 'noul');
-    assert.match(q.instructions, /`recent_requests`/);
     assert.match(q.instructions, /`last_assistant_reply`/);
     assert.doesNotMatch(JSON.stringify(q), /[가-힣]/);
   }
-  assert.deepEqual(request.questions.unit_done, QUESTIONS.unit_done);
+  assert.match(request.questions.unit_done.instructions, /`recent_requests`/);
+  assert.deepEqual(request.questions, QUESTIONS);
   assert.ok(JSON.stringify(request).length < 10000);
 });
 
-test('unit_done under 0.7 means working; from 0.7 the unit is done', () => {
-  assert.deepEqual(judgmentFrom({ unit_done: 0.69, goal_done: 0.99 }, DEFAULT_CONFIG), { phase: 'working', clear: false });
-  assert.deepEqual(judgmentFrom({ unit_done: 0.7, goal_done: 0.1 }, DEFAULT_CONFIG), { phase: 'unit_done', clear: false });
+test('unit_done under 0.6 means working; from 0.6 the unit is done', () => {
+  assert.deepEqual(judgmentFrom({ unit_done: 0.59, phase_done: 0.1 }, DEFAULT_CONFIG), { phase: 'working', clear: false });
+  assert.deepEqual(judgmentFrom({ unit_done: 0.6, phase_done: 0.1 }, DEFAULT_CONFIG), { phase: 'unit_done', clear: false });
 });
 
-test('clear needs goal_done of 0.8 or more', () => {
-  assert.deepEqual(judgmentFrom({ unit_done: 0.9, goal_done: 0.79 }, DEFAULT_CONFIG), { phase: 'unit_done', clear: false });
-  assert.deepEqual(judgmentFrom({ unit_done: 0.9, goal_done: 0.8 }, DEFAULT_CONFIG), { phase: 'unit_done', clear: true });
+test('a closed stage (phase_done 0.6 or more) means clear, whatever unit_done says', () => {
+  assert.deepEqual(judgmentFrom({ unit_done: 0.9, phase_done: 0.59 }, DEFAULT_CONFIG), { phase: 'unit_done', clear: false });
+  assert.deepEqual(judgmentFrom({ unit_done: 0.9, phase_done: 0.6 }, DEFAULT_CONFIG), { phase: 'unit_done', clear: true });
+  assert.deepEqual(judgmentFrom({ unit_done: 0.3, phase_done: 0.8 }, DEFAULT_CONFIG), { phase: 'unit_done', clear: true });
   assert.deepEqual(judgmentFrom({ unit_done: 0.9 }, DEFAULT_CONFIG), { phase: 'unit_done', clear: false });
-  assert.equal(judgmentFrom({ goal_done: 0.9 }, DEFAULT_CONFIG), null);
+  assert.equal(judgmentFrom({ phase_done: 0.9 }, DEFAULT_CONFIG), null);
 });
 
 test('the thresholds come from the config', () => {
-  const config: Config = { ...DEFAULT_CONFIG, context: { ...DEFAULT_CONFIG.context, unitDoneYes: 0.5, goalDoneYes: 0.95 } };
-  assert.deepEqual(judgmentFrom({ unit_done: 0.55, goal_done: 0.9 }, config), { phase: 'unit_done', clear: false });
+  const config: Config = { ...DEFAULT_CONFIG, context: { ...DEFAULT_CONFIG.context, unitDoneYes: 0.5, phaseDoneYes: 0.95 } };
+  assert.deepEqual(judgmentFrom({ unit_done: 0.55, phase_done: 0.9 }, config), { phase: 'unit_done', clear: false });
+  assert.deepEqual(judgmentFrom({ unit_done: 0.45, phase_done: 0.9 }, config), { phase: 'working', clear: false });
 });
 
 test('background tasks count only when there are some', () => {

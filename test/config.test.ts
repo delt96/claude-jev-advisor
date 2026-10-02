@@ -29,7 +29,7 @@ test('the defaults match the spec', () => {
     lang: 'ko',
     keyFile: null,
     display: 'mod',
-    context: { enabled: true, minTokens: 100000, compactMinTokens: 200000, redRemainingPct: 20, unitDoneYes: 0.7, goalDoneYes: 0.8 },
+    context: { enabled: true, minTokens: 100000, compactMinTokens: 200000, redRemainingPct: 20, unitDoneYes: 0.6, phaseDoneYes: 0.6 },
     rm: { enabled: true, jev: true, throwawayYes: 0.8, maxDirFiles: 50 },
   });
 });

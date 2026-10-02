@@ -3,7 +3,7 @@ import fs from 'node:fs';
 export const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
 export const JEV_TIMEOUT_MS = 8000;
 
-export type JevQuestion = { type: 'noul'; instructions: string; criteria: { true: string; false: string } };
+export type JevQuestion = { type: 'noul'; instructions: string; criteria: { true: string | string[]; false: string | string[] } };
 export type JevRequest = { state: Record<string, unknown>; questions: Record<string, JevQuestion> };
 export type JevAnswer = { answers: Record<string, number>; model: string | null; requestId: string | null; ms: number };
 export type JevFailure = { error: string; requestId: string | null; ms: number };

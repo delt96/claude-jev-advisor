@@ -35,14 +35,14 @@ function transcript(home: string, size: number): string {
 const stop = (transcriptPath: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ session_id: 'sess-1', transcript_path: transcriptPath, hook_event_name: 'Stop', stop_hook_active: false, last_assistant_message: REPLY, background_tasks: [], ...extra });
 
-function jev(unit: number, goal: number, calls: string[] = []): FetchFn {
+function jev(unit: number, stage: number, calls: string[] = []): FetchFn {
   return async (_url, init) => {
     calls.push(init.body);
     return {
       ok: true,
       status: 200,
       headers: { get: () => null },
-      text: async () => JSON.stringify({ model: 'jev-1', answers: { unit_done: { type: 'noul', noul: unit }, goal_done: { type: 'noul', noul: goal } } }),
+      text: async () => JSON.stringify({ model: 'jev-1', answers: { unit_done: { type: 'noul', noul: unit }, phase_done: { type: 'noul', noul: stage } } }),
     };
   };
 }
@@ -52,7 +52,7 @@ const deps = (home: string, fetchFn: FetchFn): ContextHookDeps => ({ home, env: 
 const logLines = (home: string) =>
   fs.readFileSync(path.join(dataDir(home), 'log', '2026-10.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
 
-test('a finished goal at 312k is judged clear, saved for the display and logged with what Jev saw', async () => {
+test('a finished stage at 312k is judged clear, saved for the display and logged with what Jev saw', async () => {
   const home = setup();
   const calls: string[] = [];
   const out = await runContextHook('stop', stop(transcript(home, 312000)), deps(home, jev(0.9, 0.85, calls)));
@@ -64,7 +64,7 @@ test('a finished goal at 312k is judged clear, saved for the display and logged 
   assert.equal(log.event, 'stop');
   assert.equal(log.size, 312000);
   assert.equal(log.reason, null);
-  assert.deepEqual(log.jev.answers, { unit_done: 0.9, goal_done: 0.85 });
+  assert.deepEqual(log.jev.answers, { unit_done: 0.9, phase_done: 0.85 });
   assert.equal(log.jev.state.last_assistant_reply, REPLY);
   assert.equal(JSON.stringify(log).includes('ts-test-key'), false);
 });
@@ -73,7 +73,7 @@ test('with display message the advice is printed as a systemMessage, and nothing
   const home = setup((c) => ({ ...c, display: 'message' }));
   const out = await runContextHook('stop', stop(transcript(home, 312000)), deps(home, jev(0.9, 0.2)));
   assert.deepEqual(JSON.parse(out ?? ''), { systemMessage: '🟡 312k 지금까지 정리하고 이어가는 건 어떠세요? /compact' });
-  assert.equal(await runContextHook('stop', stop(transcript(home, 312000)), deps(home, jev(0.3, 0.9))), null);
+  assert.equal(await runContextHook('stop', stop(transcript(home, 312000)), deps(home, jev(0.3, 0.2))), null);
 });
 
 test('below 100k Jev is not asked and only the size is saved', async () => {
