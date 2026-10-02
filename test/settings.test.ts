@@ -65,3 +65,33 @@ test('findCommands lists matching commands with their event and matcher', () => 
   assert.deepEqual(findCommands(settings, OWN_RM), [{ event: 'PreToolUse', matcher: 'Bash', command: OUR_COMMAND }]);
   assert.deepEqual(findCommands(settings, LEGACY), []);
 });
+
+test('withoutCommands returns the same object when nothing matched', () => {
+  const emptyHooks: Settings = { hooks: {}, model: 'x' };
+  assert.equal(withoutCommands(emptyHooks, OWN_RM), emptyHooks);
+  const hooksFirst: Settings = { hooks: { Notification: [{ matcher: '', hooks: [] }], Stop: [] }, model: 'x' };
+  assert.equal(withoutCommands(hooksFirst, OWN_RM), hooksFirst);
+});
+
+test('withoutCommands keeps pre-existing empty groups and events while removing ours', () => {
+  const before: Settings = {
+    hooks: {
+      Notification: [{ matcher: '', hooks: [] }],
+      PreToolUse: [],
+      Stop: [{ hooks: [{ type: 'command', command: OUR_COMMAND }] }],
+    },
+  };
+  assert.deepEqual(withoutCommands(before, OWN_RM), { hooks: { Notification: [{ matcher: '', hooks: [] }], PreToolUse: [] } });
+});
+
+test('withoutCommands keeps the position of the hooks key', () => {
+  const before: Settings = { hooks: { Stop: [{ hooks: [{ type: 'command', command: OUR_COMMAND }, { type: 'command', command: 'node a.js' }] }] }, model: 'x', theme: 'dark' };
+  assert.deepEqual(Object.keys(withoutCommands(before, OWN_RM)), ['hooks', 'model', 'theme']);
+});
+
+test('a group without a hooks array is kept by withoutCommands and ignored by findCommands', () => {
+  const odd = { matcher: 'Bash' } as unknown as Settings['hooks'] extends Record<string, (infer G)[]> | undefined ? G : never;
+  const before: Settings = { hooks: { PreToolUse: [odd, { matcher: 'Bash', hooks: [{ type: 'command', command: OUR_COMMAND }] }] } };
+  assert.deepEqual(findCommands(before, OWN_RM), [{ event: 'PreToolUse', matcher: 'Bash', command: OUR_COMMAND }]);
+  assert.deepEqual(withoutCommands(before, OWN_RM), { hooks: { PreToolUse: [odd] } });
+});

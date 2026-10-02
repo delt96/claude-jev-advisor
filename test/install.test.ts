@@ -129,3 +129,26 @@ test('setEnabled flips the switch without touching settings.json', () => {
   assert.equal(readConfig(home).rm.enabled, true);
   assert.equal(fs.existsSync(settingsPath(home)), false);
 });
+
+test('uninstall with nothing of ours changes nothing, not even the key order', () => {
+  const home = tempHome();
+  const text = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'node stop.js' }] }], Notification: [{ matcher: '', hooks: [] }] }, model: 'x' }, null, 2);
+  writeSettings(home, text);
+  const r = uninstall({ home, features: ['rm'], now: NOW });
+  assert.deepEqual(r.removed, []);
+  assert.equal(r.backup, null);
+  assert.equal(fs.readFileSync(settingsPath(home), 'utf8'), text);
+  assert.equal(fs.existsSync(backupsDir(home)), false);
+});
+
+test('install keeps a user empty group and an empty event', () => {
+  const home = tempHome();
+  writeSettings(home, { hooks: { Notification: [{ matcher: '', hooks: [] }], PreToolUse: [] } });
+  install(opts(home));
+  assert.deepEqual(readSettings(home), {
+    hooks: {
+      Notification: [{ matcher: '', hooks: [] }],
+      PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: OUR_COMMAND, timeout: 15 }] }],
+    },
+  });
+});
