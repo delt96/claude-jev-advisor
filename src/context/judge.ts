@@ -50,7 +50,18 @@ export function judgmentFrom(answers: Record<string, number>, config: Config): J
   return unit >= config.context.unitDoneYes ? { phase: 'unit_done', clear: false } : { phase: 'working', clear: false };
 }
 
-export function hasBackgroundTasks(value: unknown): boolean {
-  if (Array.isArray(value)) return value.length > 0;
-  return typeof value === 'object' && value !== null && Object.keys(value).length > 0;
+// A dev server, a watcher or a monitor can run for the whole session; only subagents and workflows are work
+// that the turn is waiting for.
+const OWN_BACKGROUND_WORK = new Set(['subagent', 'workflow']);
+
+export function backgroundTypes(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((task) => {
+    const type = typeof task === 'object' && task !== null ? (task as Record<string, unknown>).type : undefined;
+    return typeof type === 'string' ? type : 'unknown';
+  });
+}
+
+export function busyInBackground(types: string[]): boolean {
+  return types.some((type) => OWN_BACKGROUND_WORK.has(type));
 }

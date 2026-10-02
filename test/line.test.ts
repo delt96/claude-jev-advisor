@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_CONFIG, type Config } from '../src/config.js';
-import { adviceLine, parseState, usableJudgment, type ContextState, type Judgment } from '../src/display/line.js';
+import { adviceKind, adviceLine, parseState, usableJudgment, type ContextState, type Judgment } from '../src/display/line.js';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const T = 967000;
@@ -35,6 +35,16 @@ test('a finished unit suggests /compact from 250k', () => {
   assert.equal(line(249000, COMPACT), '249k');
   assert.equal(line(250000, COMPACT), '🟡 250k 지금까지 정리하고 이어가는 건 어떠세요? /compact');
   assert.equal(line(312000, COMPACT), '🟡 312k 지금까지 정리하고 이어가는 건 어떠세요? /compact');
+});
+
+test('adviceKind names the advice the line shows outside the red zone', () => {
+  assert.equal(adviceKind(312000, CLEAR, DEFAULT_CONFIG), 'clear');
+  assert.equal(adviceKind(312000, COMPACT, DEFAULT_CONFIG), 'compact');
+  assert.equal(adviceKind(312000, WORKING, DEFAULT_CONFIG), null);
+  assert.equal(adviceKind(249000, CLEAR, DEFAULT_CONFIG), null);
+  assert.equal(adviceKind(null, CLEAR, DEFAULT_CONFIG), null);
+  const later: Config = { ...DEFAULT_CONFIG, context: { ...DEFAULT_CONFIG.context, compactMinTokens: 400000 } };
+  assert.equal(adviceKind(312000, COMPACT, later), null);
 });
 
 test('within 20% of auto-compact the line is red with the percent left', () => {

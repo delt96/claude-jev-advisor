@@ -1,21 +1,40 @@
 import { readConfig } from '../config.js';
-import { adviceLine, type ContextState, type Judgment } from '../display/line.js';
+import { adviceKind, adviceLine, type ContextState, type Judgment } from '../display/line.js';
 import { callJev, readJevKey, type FetchFn } from '../jev.js';
 import { appendLog, removeState, writeState } from './files.js';
-import { hasBackgroundTasks, jevRequest, judgmentFrom } from './judge.js';
+import { backgroundTypes, busyInBackground, jevRequest, judgmentFrom } from './judge.js';
 import { readTranscript, type TranscriptFacts } from './transcript.js';
 
 export type ContextEvent = 'stop' | 'session-end';
-export type ContextHookDeps = { home: string; env: Record<string, string | undefined>; now: () => Date; fetchFn?: FetchFn };
+export type ContextHookDeps = {
+  home: string;
+  env: Record<string, string | undefined>;
+  now: () => Date;
+  fetchFn?: FetchFn;
+  sleep?: (ms: number) => Promise<void>;
+};
 
-const ADVICE = /\/(clear|compact)$/;
+export const REPLY_WAIT_MS = 3000;
+export const REPLY_POLL_MS = 100;
 
-function factsOf(transcriptPath: string | null): TranscriptFacts {
-  if (!transcriptPath) return { size: null, requests: [] };
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function readFacts(transcriptPath: string, reply: string): TranscriptFacts {
   try {
-    return readTranscript(transcriptPath);
+    return readTranscript(transcriptPath, reply);
   } catch {
-    return { size: null, requests: [] };
+    return { size: null, requests: [], replySeen: false };
+  }
+}
+
+// The Stop hook can run before the turn's last reply is in the transcript (seen on first turns), which would
+// leave the size unknown or one reply old; a short wait for that reply usually gets the current size.
+async function factsAfterReply(transcriptPath: string | null, reply: string, sleep: (ms: number) => Promise<void>) {
+  if (!transcriptPath) return { size: null, requests: [], replySeen: false, waitedMs: 0 };
+  for (let waitedMs = 0; ; waitedMs += REPLY_POLL_MS) {
+    const facts = readFacts(transcriptPath, reply);
+    if (facts.replySeen || waitedMs >= REPLY_WAIT_MS) return { ...facts, waitedMs };
+    await sleep(REPLY_POLL_MS);
   }
 }
 
@@ -32,7 +51,9 @@ export async function runContextHook(event: ContextEvent, raw: string, deps: Con
   }
   if (input.stop_hook_active === true) return null;
   const transcriptPath = typeof input.transcript_path === 'string' ? input.transcript_path : null;
-  const { size, requests } = factsOf(transcriptPath);
+  const reply = typeof input.last_assistant_message === 'string' ? input.last_assistant_message : '';
+  const { size, requests, replySeen, waitedMs } = await factsAfterReply(transcriptPath, reply, deps.sleep ?? pause);
+  const background = backgroundTypes(input.background_tasks);
   let judgment: Judgment | null = null;
   let reason: string | null = null;
   let jev: Record<string, unknown> | null = null;
@@ -40,7 +61,7 @@ export async function runContextHook(event: ContextEvent, raw: string, deps: Con
     reason = 'unknown_size';
   } else if (size < config.context.minTokens) {
     reason = 'below_min';
-  } else if (hasBackgroundTasks(input.background_tasks)) {
+  } else if (busyInBackground(background)) {
     reason = 'background_tasks';
     judgment = { phase: 'working', clear: false };
   } else {
@@ -48,7 +69,7 @@ export async function runContextHook(event: ContextEvent, raw: string, deps: Con
     if (!key) {
       reason = 'no_key';
     } else {
-      const request = jevRequest(requests, typeof input.last_assistant_message === 'string' ? input.last_assistant_message : '');
+      const request = jevRequest(requests, reply);
       const result = await callJev(request, { key, fetchFn: deps.fetchFn });
       jev = { state: request.state, ...result };
       if ('error' in result) {
@@ -66,8 +87,8 @@ export async function runContextHook(event: ContextEvent, raw: string, deps: Con
   } catch {
     // A state that cannot be saved must not also lose the log line of a Jev call already made.
   }
-  appendLog(deps.home, at, { helper: 'context', event: 'stop', sessionId, transcriptPath, size, reason, judgment, jev });
-  if (config.display !== 'message') return null;
-  const line = adviceLine({ size, threshold: null, judgment, config });
-  return ADVICE.test(line) ? JSON.stringify({ systemMessage: line }) : null;
+  const advice = adviceKind(size, judgment, config);
+  appendLog(deps.home, at, { helper: 'context', event: 'stop', sessionId, transcriptPath, size, replySeen, waitedMs, background, reason, judgment, advice, jev });
+  if (config.display !== 'message' || !advice) return null;
+  return JSON.stringify({ systemMessage: adviceLine({ size, threshold: null, judgment, config }) });
 }

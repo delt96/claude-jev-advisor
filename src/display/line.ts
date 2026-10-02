@@ -1,6 +1,7 @@
 import type { Config, Lang } from '../config-shape.js';
 
 export type Judgment = { phase: 'working' | 'unit_done'; clear: boolean };
+export type AdviceKind = 'clear' | 'compact';
 export type ContextState = { sessionId: string; at: number; size: number | null; judgment: Judgment | null };
 export type LineInput = { size: number | null; threshold: number | null; judgment: Judgment | null; config: Config };
 
@@ -31,6 +32,12 @@ export function remainingPct(size: number, threshold: number): number {
   return Math.max(0, Math.round(((threshold - size) / threshold) * 100));
 }
 
+export function adviceKind(size: number | null, judgment: Judgment | null, config: Config): AdviceKind | null {
+  if (size === null || size < config.context.minTokens || !judgment || judgment.phase === 'working') return null;
+  if (judgment.clear) return 'clear';
+  return size >= config.context.compactMinTokens ? 'compact' : null;
+}
+
 export function adviceLine({ size, threshold, judgment, config }: LineInput): string {
   if (size === null) return '';
   const k = formatSize(size);
@@ -43,10 +50,8 @@ export function adviceLine({ size, threshold, judgment, config }: LineInput): st
     return `${head} · ${counted.clear ? phrases.clear : phrases.compact}`;
   }
   if (!counted) return k;
-  if (counted.phase === 'working') return `🟢 ${k}`;
-  if (counted.clear) return `🟡 ${k} ${phrases.clear}`;
-  if (size >= config.context.compactMinTokens) return `🟡 ${k} ${phrases.compact}`;
-  return `🟢 ${k}`;
+  const kind = adviceKind(size, counted, config);
+  return kind ? `🟡 ${k} ${phrases[kind]}` : `🟢 ${k}`;
 }
 
 export function usableJudgment(state: ContextState | null, liveSize: number | null, turnStartedAt: number): Judgment | null {

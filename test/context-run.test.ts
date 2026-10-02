@@ -26,7 +26,7 @@ function transcript(home: string, size: number): string {
   const file = path.join(home, 'session.jsonl');
   const entries = [
     { type: 'user', isSidechain: false, origin: { kind: 'human' }, message: { role: 'user', content: '로그인 화면 고쳐 줘' } },
-    { type: 'assistant', isSidechain: false, message: { model: 'claude-opus-5-5', usage: { input_tokens: 1, cache_read_input_tokens: size - 1, cache_creation_input_tokens: 0 } } },
+    { type: 'assistant', isSidechain: false, message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: REPLY }], usage: { input_tokens: 1, cache_read_input_tokens: size - 1, cache_creation_input_tokens: 0 } } },
   ];
   fs.writeFileSync(file, `${entries.map((e) => JSON.stringify(e)).join('\n')}\n`);
   return file;
@@ -48,7 +48,7 @@ function jev(unit: number, stage: number, calls: string[] = []): FetchFn {
 }
 
 const failing: FetchFn = async () => ({ ok: false, status: 500, headers: { get: () => null }, text: async () => 'boom' });
-const deps = (home: string, fetchFn: FetchFn): ContextHookDeps => ({ home, env: {}, now: () => NOW, fetchFn });
+const deps = (home: string, fetchFn: FetchFn, sleep: (ms: number) => Promise<void> = async () => {}): ContextHookDeps => ({ home, env: {}, now: () => NOW, fetchFn, sleep });
 const logLines = (home: string) =>
   fs.readFileSync(path.join(dataDir(home), 'log', '2026-10.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
 
@@ -85,13 +85,24 @@ test('below 100k Jev is not asked and only the size is saved', async () => {
   assert.equal(logLines(home)[0].reason, 'below_min');
 });
 
-test('running background tasks count as work in progress without asking Jev', async () => {
+test('a running subagent counts as work in progress without asking Jev', async () => {
   const home = setup();
   const calls: string[] = [];
-  await runContextHook('stop', stop(transcript(home, 312000), { background_tasks: [{ id: 'b1' }] }), deps(home, jev(0.9, 0.9, calls)));
+  await runContextHook('stop', stop(transcript(home, 312000), { background_tasks: [{ id: 'b1', type: 'shell' }, { id: 'b2', type: 'subagent' }] }), deps(home, jev(0.9, 0.9, calls)));
   assert.equal(calls.length, 0);
   assert.deepEqual(readState(home, 'sess-1')?.judgment, { phase: 'working', clear: false });
-  assert.equal(logLines(home)[0].reason, 'background_tasks');
+  const [log] = logLines(home);
+  assert.equal(log.reason, 'background_tasks');
+  assert.deepEqual(log.background, ['shell', 'subagent']);
+});
+
+test('a background shell or monitor alone does not stop the judgment', async () => {
+  const home = setup();
+  const calls: string[] = [];
+  await runContextHook('stop', stop(transcript(home, 312000), { background_tasks: [{ id: 'b1', type: 'shell' }, { id: 'b2', type: 'monitor' }] }), deps(home, jev(0.9, 0.2, calls)));
+  assert.equal(calls.length, 1);
+  assert.deepEqual(readState(home, 'sess-1')?.judgment, { phase: 'unit_done', clear: false });
+  assert.equal(logLines(home)[0].advice, 'compact');
 });
 
 test('a stop hook that is already continuing does nothing', async () => {
@@ -115,11 +126,36 @@ test('without a key, or when Jev fails, the size is still saved without a judgme
   assert.match(log.jev.error, /^HTTP 500/);
 });
 
-test('a missing transcript saves an unknown size', async () => {
+test('a missing transcript saves an unknown size after waiting at most three seconds for it', async () => {
   const home = setup();
-  await runContextHook('stop', stop(path.join(home, 'gone.jsonl')), deps(home, jev(0.9, 0.9)));
+  const slept: number[] = [];
+  await runContextHook('stop', stop(path.join(home, 'gone.jsonl')), deps(home, jev(0.9, 0.9), async (ms) => void slept.push(ms)));
   assert.deepEqual(readState(home, 'sess-1'), { sessionId: 'sess-1', at: NOW.getTime(), size: null, judgment: null });
-  assert.equal(logLines(home)[0].reason, 'unknown_size');
+  const [log] = logLines(home);
+  assert.equal(log.reason, 'unknown_size');
+  assert.equal(log.replySeen, false);
+  assert.equal(log.waitedMs, 3000);
+  assert.equal(slept.reduce((a, b) => a + b, 0), 3000);
+});
+
+test('when the reply is not in the transcript yet, the hook waits for it and judges the size that comes with it', async () => {
+  const home = setup();
+  const file = path.join(home, 'session.jsonl');
+  fs.writeFileSync(file, `${JSON.stringify({ type: 'user', isSidechain: false, origin: { kind: 'human' }, message: { role: 'user', content: '로그인 화면 고쳐 줘' } })}\n`);
+  let naps = 0;
+  const sleep = async () => {
+    naps += 1;
+    if (naps === 3) transcript(home, 312000);
+  };
+  const calls: string[] = [];
+  await runContextHook('stop', stop(file), deps(home, jev(0.9, 0.85, calls), sleep));
+  assert.equal(naps, 3);
+  assert.equal(calls.length, 1);
+  assert.equal(readState(home, 'sess-1')?.size, 312000);
+  const [log] = logLines(home);
+  assert.equal(log.replySeen, true);
+  assert.equal(log.waitedMs, 300);
+  assert.equal(log.advice, 'clear');
 });
 
 test('switched off, nothing is read or written', async () => {

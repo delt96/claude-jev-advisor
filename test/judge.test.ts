@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_CONFIG, type Config } from '../src/config.js';
-import { QUESTIONS, cutReply, hasBackgroundTasks, jevRequest, judgmentFrom } from '../src/context/judge.js';
+import { QUESTIONS, backgroundTypes, busyInBackground, cutReply, jevRequest, judgmentFrom } from '../src/context/judge.js';
 
 test('a long reply keeps its first and last 1500 characters', () => {
   assert.equal(cutReply('short'), 'short');
@@ -45,10 +45,15 @@ test('the thresholds come from the config', () => {
   assert.deepEqual(judgmentFrom({ unit_done: 0.45, phase_done: 0.9 }, config), { phase: 'working', clear: false });
 });
 
-test('background tasks count only when there are some', () => {
-  assert.equal(hasBackgroundTasks([]), false);
-  assert.equal(hasBackgroundTasks(undefined), false);
-  assert.equal(hasBackgroundTasks({}), false);
-  assert.equal(hasBackgroundTasks([{ id: 'b1' }]), true);
-  assert.equal(hasBackgroundTasks({ b1: { status: 'running' } }), true);
+test('background task types are read from the list, with unknown for a task without one', () => {
+  assert.deepEqual(backgroundTypes([{ id: 'b1', type: 'shell' }, { id: 'b2', type: 'subagent' }, { id: 'b3' }, null]), ['shell', 'subagent', 'unknown', 'unknown']);
+  assert.deepEqual(backgroundTypes(undefined), []);
+  assert.deepEqual(backgroundTypes({ b1: { type: 'subagent' } }), []);
+});
+
+test('only subagents and workflows keep the turn busy; shells and monitors do not', () => {
+  assert.equal(busyInBackground([]), false);
+  assert.equal(busyInBackground(['shell', 'monitor', 'unknown']), false);
+  assert.equal(busyInBackground(['shell', 'subagent']), true);
+  assert.equal(busyInBackground(['workflow']), true);
 });
