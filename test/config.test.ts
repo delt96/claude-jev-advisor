@@ -29,7 +29,7 @@ test('the defaults match the spec', () => {
     lang: 'ko',
     keyFile: null,
     display: 'mod',
-    context: { enabled: true, minTokens: 100000, compactMinTokens: 200000, redRemainingPct: 20, unitDoneYes: 0.6, phaseDoneYes: 0.6 },
+    context: { enabled: true, minTokens: 250000, compactMinTokens: 250000, redRemainingPct: 20, unitDoneYes: 0.6, phaseDoneYes: 0.6 },
     rm: { enabled: true, jev: true, throwawayYes: 0.8, maxDirFiles: 50 },
   });
 });
@@ -66,4 +66,33 @@ test('updateConfig saves the changed config', () => {
   const next = updateConfig(home, (c) => ({ ...c, rm: { ...c.rm, enabled: false } }));
   assert.equal(next.rm.enabled, false);
   assert.equal(readConfig(home).rm.enabled, false);
+});
+
+test('only the values that differ from the defaults are saved, with the config version', () => {
+  const home = tempHome();
+  writeConfig(home, { ...DEFAULT_CONFIG, keyFile: 'C:/k.env', context: { ...DEFAULT_CONFIG.context, minTokens: 300000 } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath(home), 'utf8')), { version: 2, keyFile: 'C:/k.env', context: { minTokens: 300000 } });
+  writeConfig(home, DEFAULT_CONFIG);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath(home), 'utf8')), { version: 2 });
+});
+
+test('a config saved by 0.1.x drops its default thresholds so the new defaults apply', () => {
+  const home = tempHome();
+  writeRaw(home, JSON.stringify({
+    lang: 'ko',
+    keyFile: 'C:/k.env',
+    display: 'mod',
+    context: { enabled: true, minTokens: 250000, compactMinTokens: 200000, redRemainingPct: 20, unitDoneYes: 0.7, goalDoneYes: 0.8 },
+    rm: { enabled: true, jev: true, throwawayYes: 0.8, maxDirFiles: 50 },
+  }));
+  const config = readConfig(home);
+  assert.deepEqual(config.context, { ...DEFAULT_CONFIG.context, minTokens: 250000 });
+  assert.equal(config.keyFile, 'C:/k.env');
+  assert.equal('goalDoneYes' in config.context, false);
+});
+
+test('a version 2 config keeps a value even when it equals an old default', () => {
+  const home = tempHome();
+  writeRaw(home, JSON.stringify({ version: 2, context: { unitDoneYes: 0.7, minTokens: 100000 } }));
+  assert.deepEqual(readConfig(home).context, { ...DEFAULT_CONFIG.context, unitDoneYes: 0.7, minTokens: 100000 });
 });

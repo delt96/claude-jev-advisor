@@ -31,7 +31,7 @@ test('an installed context shows its display, key, thresholds and no broken line
   assert.ok(lines.includes('context: installed, on'));
   assert.ok(lines.includes('  display: mod'));
   assert.ok(lines.includes('  key: missing'));
-  assert.ok(lines.includes('  thresholds: judge from 100k, /compact from 200k, red at 20% left'));
+  assert.ok(lines.includes('  thresholds: judge from 250k, /compact from 250k, red at 20% left'));
   assert.equal(lines.some((l) => l.includes('broken')), false);
   assert.ok(statusLines(home, { TYPESAFE_API_KEY: 'ts-x' }).includes('  key: set'));
   assert.equal(statusLines(home, { TYPESAFE_API_KEY: 'ts-x' }).join('\n').includes('ts-x'), false);

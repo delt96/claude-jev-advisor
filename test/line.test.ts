@@ -13,26 +13,27 @@ const CLEAR: Judgment = { phase: 'unit_done', clear: true };
 const line = (size: number | null, judgment: Judgment | null, threshold: number | null = T, config: Config = DEFAULT_CONFIG) =>
   adviceLine({ size, threshold, judgment, config });
 
-test('below 100k, or without a judgment, only the size shows', () => {
+test('below 250k, or without a judgment, only the size shows', () => {
   assert.equal(line(null, CLEAR), '');
   assert.equal(line(52000, CLEAR), '52k');
-  assert.equal(line(99000, WORKING), '99k');
+  assert.equal(line(249000, WORKING), '249k');
   assert.equal(line(312000, null), '312k');
 });
 
 test('work in progress is green', () => {
   assert.equal(line(312000, WORKING), '🟢 312k');
-  assert.equal(line(100000, WORKING), '🟢 100k');
+  assert.equal(line(250000, WORKING), '🟢 250k');
 });
 
-test('a finished goal suggests /clear from 100k', () => {
-  assert.equal(line(150000, CLEAR), '🟡 150k 새롭게 시작하는 건 어떠세요? /clear');
+test('a closed stage suggests /clear from 250k', () => {
+  assert.equal(line(249000, CLEAR), '249k');
+  assert.equal(line(250000, CLEAR), '🟡 250k 새롭게 시작하는 건 어떠세요? /clear');
   assert.equal(line(312000, CLEAR), '🟡 312k 새롭게 시작하는 건 어떠세요? /clear');
 });
 
-test('a finished unit suggests /compact only from 200k', () => {
-  assert.equal(line(199000, COMPACT), '🟢 199k');
-  assert.equal(line(200000, COMPACT), '🟡 200k 지금까지 정리하고 이어가는 건 어떠세요? /compact');
+test('a finished unit suggests /compact from 250k', () => {
+  assert.equal(line(249000, COMPACT), '249k');
+  assert.equal(line(250000, COMPACT), '🟡 250k 지금까지 정리하고 이어가는 건 어떠세요? /compact');
   assert.equal(line(312000, COMPACT), '🟡 312k 지금까지 정리하고 이어가는 건 어떠세요? /compact');
 });
 
@@ -53,6 +54,7 @@ test('thresholds and the language come from the config', () => {
   const en: Config = { ...DEFAULT_CONFIG, lang: 'en', context: { ...DEFAULT_CONFIG.context, minTokens: 10000, compactMinTokens: 20000, redRemainingPct: 50 } };
   assert.equal(line(15000, CLEAR, T, en), '🟡 15k Start fresh? /clear');
   assert.equal(line(25000, COMPACT, T, en), '🟡 25k Wrap up what you have and continue? /compact');
+  assert.equal(line(15000, COMPACT, T, en), '🟢 15k');
   assert.equal(line(500000, WORKING, T, en), '🔴 500k 48% · When this work is done, wrap up and continue? /compact');
 });
 
