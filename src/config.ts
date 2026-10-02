@@ -52,7 +52,7 @@ export function normalizeConfig(raw: unknown): Config {
 
 export function readConfig(home: string): Config {
   try {
-    return normalizeConfig(JSON.parse(fs.readFileSync(configPath(home), 'utf8').replace(/^﻿/, '')));
+    return normalizeConfig(JSON.parse(fs.readFileSync(configPath(home), 'utf8').replace(/^\uFEFF/, '')));
   } catch {
     return normalizeConfig({});
   }
