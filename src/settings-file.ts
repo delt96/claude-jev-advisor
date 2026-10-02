@@ -24,9 +24,22 @@ export function backupName(now: Date): string {
 export function backupSettingsFile(file: string, dir: string, now: Date): string | null {
   if (!fs.existsSync(file)) return null;
   fs.mkdirSync(dir, { recursive: true });
-  const target = path.join(dir, backupName(now));
-  fs.copyFileSync(file, target);
-  return target;
+  const baseName = backupName(now);
+  let target = path.join(dir, baseName);
+  let suffix = 2;
+  while (true) {
+    try {
+      fs.copyFileSync(file, target, fs.constants.COPYFILE_EXCL);
+      return target;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+        target = path.join(dir, `${baseName}-${suffix}`);
+        suffix++;
+      } else {
+        throw err;
+      }
+    }
+  }
 }
 
 export function writeSettingsFile(file: string, settings: Settings): void {

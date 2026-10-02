@@ -40,6 +40,20 @@ test('backupSettingsFile copies the file and returns null when there is nothing 
   assert.equal(fs.readFileSync(copy!, 'utf8'), '{"a": 1}');
 });
 
+test('a second backup in the same second keeps the first', () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'settings.json');
+  const backups = path.join(dir, 'backups');
+  const now = new Date(2026, 9, 2, 9, 5, 7);
+  fs.writeFileSync(file, '{"a": 1}');
+  const first = backupSettingsFile(file, backups, now);
+  fs.writeFileSync(file, '{"a": 2}');
+  const second = backupSettingsFile(file, backups, now);
+  assert.equal(second, `${first}-2`);
+  assert.equal(fs.readFileSync(first!, 'utf8'), '{"a": 1}');
+  assert.equal(fs.readFileSync(second!, 'utf8'), '{"a": 2}');
+});
+
 test('writeSettingsFile creates the folder and writes two-space JSON with a newline', () => {
   const file = path.join(tempDir(), 'new', 'settings.json');
   writeSettingsFile(file, { theme: 'dark', hooks: {} });

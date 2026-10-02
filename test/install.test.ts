@@ -106,12 +106,16 @@ test('install switches a feature back on', () => {
 
 test('uninstall removes only this package and reports what it removed', () => {
   const home = tempHome();
-  writeSettings(home, { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'node mine.js' }] }] } });
-  install(opts(home));
+  const original = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'node mine.js' }] }] } };
+  writeSettings(home, original);
+  const installResult = install(opts(home));
   const r = uninstall({ home, features: ['rm'], now: NOW });
   assert.deepEqual(r.removed, ['rm']);
   assert.notEqual(r.backup, null);
-  assert.deepEqual(readSettings(home), { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'node mine.js' }] }] } });
+  assert.deepEqual(readSettings(home), original);
+  assert.notEqual(installResult.backup, null);
+  assert.deepEqual(JSON.parse(fs.readFileSync(installResult.backup!, 'utf8')), original);
+  assert.notEqual(r.backup, installResult.backup);
   const again = uninstall({ home, features: ['rm'], now: NOW });
   assert.deepEqual(again.removed, []);
   assert.equal(again.backup, null);
