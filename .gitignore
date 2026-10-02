@@ -1,4 +1,5 @@
 node_modules/
 dist/
+mod/hooks/register.js
 *.tsbuildinfo
 *.tgz
