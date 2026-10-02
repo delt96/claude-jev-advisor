@@ -73,20 +73,27 @@ function checkOptions(command: string, options: Record<string, string>): string 
   return null;
 }
 
-async function askAndSaveKey(io: CliIo, prompt: KeyPrompt): Promise<boolean> {
+async function askAndSaveKey(io: CliIo, prompt: KeyPrompt): Promise<void> {
   const key = await promptForKey(prompt, io.checkKey ?? ((candidate) => checkJevKey(candidate)));
   if (!key) {
     io.out('No key saved. Run "claude-jev-advisor key" to add one later.');
-    return false;
+    return;
   }
+  const before = readConfig(io.home).keyFile;
   const file = saveJevKey(io.home, key);
   updateConfig(io.home, (c) => ({ ...c, keyFile: file }));
   io.out(`Saved the key to ${file}`);
-  return true;
+  if (before && path.resolve(before) !== path.resolve(file)) io.out(`The config now uses this file instead of ${before}.`);
+  if ((io.env ?? process.env).TYPESAFE_API_KEY?.trim()) io.out('TYPESAFE_API_KEY is set in your environment; the hooks use it before the saved key.');
 }
 
-async function ensureKey(io: CliIo): Promise<void> {
-  if (readJevKey(io.env ?? process.env, readConfig(io.home).keyFile)) return;
+async function ensureKey(io: CliIo, keyFileGiven: boolean): Promise<void> {
+  const keyFile = readConfig(io.home).keyFile;
+  if (readJevKey(io.env ?? process.env, keyFile)) return;
+  if (keyFileGiven) {
+    io.out(`No TYPESAFE_API_KEY line found in ${keyFile}; context cannot judge until it has one.`);
+    return;
+  }
   if (!io.prompt) {
     io.out('No TypeSafe API key yet: run "claude-jev-advisor key" in a terminal to add one (context needs it to judge).');
     return;
@@ -121,8 +128,14 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
         if (r.replacedLegacyRmGuard) io.out('replaced the legacy rm-guard hook (its files under ~/.claude/hooks/rm-guard were left in place)');
         if (r.display) io.out(`display: ${r.display}`);
         if (r.backup) io.out(`backup: ${r.backup}`);
-        if (r.installed.length) io.out('Hooks apply right away, also in open Claude Code sessions; the bottom-row display starts with the next new session.');
-        if (r.installed.includes('context')) await ensureKey(io);
+        if (r.installed.length) {
+          io.out(
+            r.display === 'mod'
+              ? 'Hooks apply right away, also in open Claude Code sessions; the bottom-row display starts with the next new session.'
+              : 'Hooks apply right away, also in open Claude Code sessions.',
+          );
+        }
+        if (r.installed.includes('context')) await ensureKey(io, options['key-file'] !== undefined);
         return 0;
       }
       case 'uninstall': {

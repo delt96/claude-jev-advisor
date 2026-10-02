@@ -14,7 +14,7 @@ const tempHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cja-cli-'));
 async function cli(argv: string[], home = tempHome(), platform: NodeJS.Platform = 'win32') {
   const out: string[] = [];
   const err: string[] = [];
-  const io: CliIo = { home, distDir: 'C:/n/@delt/claude-jev-advisor/dist', platform, now: () => new Date(2026, 9, 2, 9, 5, 7), out: (l) => out.push(l), err: (l) => err.push(l) };
+  const io: CliIo = { home, distDir: 'C:/n/@delt/claude-jev-advisor/dist', platform, now: () => new Date(2026, 9, 2, 9, 5, 7), out: (l) => out.push(l), err: (l) => err.push(l), env: {} };
   const code = await runCli(argv, io);
   return { code, out: out.join('\n'), err: err.join('\n'), home };
 }

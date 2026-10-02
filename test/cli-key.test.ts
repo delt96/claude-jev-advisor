@@ -11,7 +11,7 @@ import { savedKeyPath } from '../src/paths.js';
 
 const tempHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cja-ckey-'));
 
-async function cli(argv: string[], opts: { home?: string; answers?: string[]; interactive?: boolean; checks?: Record<string, KeyCheck> } = {}) {
+async function cli(argv: string[], opts: { home?: string; answers?: string[]; interactive?: boolean; checks?: Record<string, KeyCheck>; env?: Record<string, string> } = {}) {
   const home = opts.home ?? tempHome();
   const out: string[] = [];
   const err: string[] = [];
@@ -24,7 +24,7 @@ async function cli(argv: string[], opts: { home?: string; answers?: string[]; in
     now: () => new Date(2026, 9, 2, 23, 0, 0),
     out: (l) => out.push(l),
     err: (l) => err.push(l),
-    env: {},
+    env: opts.env ?? {},
     prompt: opts.interactive === false ? undefined : { ask: async (q) => { asked.push(q); return answers.shift() ?? ''; }, say: (l) => out.push(l) },
     checkKey: async (key) => opts.checks?.[key] ?? { status: 'ok' },
   };
@@ -88,4 +88,26 @@ test('uninstall keeps the saved key and says where it is', async () => {
   const r = await cli(['uninstall', 'context'], { home: first.home });
   assert.match(r.out, /kept your saved TypeSafe key/);
   assert.equal(fs.existsSync(savedKeyPath(first.home)), true);
+});
+
+test('a key file given without a key is reported instead of asked over', async () => {
+  const keyFile = path.join(tempHome(), 'empty.env');
+  fs.writeFileSync(keyFile, 'OTHER=1');
+  const r = await cli(['install', 'context', '--key-file', keyFile], { answers: ['x'] });
+  assert.equal(r.asked.length, 0);
+  assert.equal(readConfig(r.home).keyFile, keyFile);
+  assert.match(r.out, /No TYPESAFE_API_KEY line found/);
+});
+
+test('the key command says when the key file changes and when the environment key comes first', async () => {
+  const home = tempHome();
+  const custom = path.join(home, 'custom.env');
+  fs.writeFileSync(custom, 'TYPESAFE_API_KEY=ts-custom');
+  await cli(['install', 'context', '--key-file', custom], { home });
+  const r = await cli(['key'], { home, answers: ['ts-new'], env: { TYPESAFE_API_KEY: 'ts-env' } });
+  assert.match(r.out, /instead of/);
+  assert.match(r.out, /TYPESAFE_API_KEY is set in your environment/);
+  assert.equal(r.out.includes('ts-env'), false);
+  assert.equal(r.out.includes('ts-new'), false);
+  assert.equal(r.err.includes('ts-new'), false);
 });

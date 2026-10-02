@@ -21,7 +21,8 @@ export async function checkJevKey(key: string, fetchFn?: FetchFn): Promise<KeyCh
 export function saveJevKey(home: string, key: string): string {
   const file = savedKeyPath(home);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `TYPESAFE_API_KEY=${key}${String.fromCharCode(10)}`, { mode: 0o600 });
+  fs.writeFileSync(file, `TYPESAFE_API_KEY=${key}\n`, { mode: 0o600 });
+  fs.chmodSync(file, 0o600);
   return file;
 }
 

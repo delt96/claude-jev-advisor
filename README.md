@@ -30,7 +30,7 @@ Then register the hooks:
 claude-jev-advisor install
 ```
 
-When the context helper is installed and no key is found, `install` asks for your TypeSafe API key. What you type is hidden. It checks the key with one small Jev call and saves it to `~/.claude/claude-jev-advisor/jev-key.env`. Press Enter to skip; `claude-jev-advisor key` asks again later. Instead of typing it, you can set `TYPESAFE_API_KEY`, or pass `--key-file <path>` to a file holding a line `TYPESAFE_API_KEY=...` (then only that path is saved). The key is never printed or logged.
+When the context helper is installed and no key is found, `install` asks for your TypeSafe API key. What you type is hidden. It checks the key with one small Jev call and saves it to `~/.claude/claude-jev-advisor/jev-key.env`. Press Enter to skip; `claude-jev-advisor key` asks again later. Instead of typing it, you can set `TYPESAFE_API_KEY`, or pass `--key-file <path>` to a file holding a line `TYPESAFE_API_KEY=...` (then only that path is saved). The key is never printed or logged. On Windows that file is protected by your user folder's permissions only.
 
 Before it changes `~/.claude/settings.json`, `install` copies it to `~/.claude/backups/settings.json.<YYYY-MM-DD-HHmmss>-before-claude-jev-advisor`. If a backup from the same second already exists, it adds `-2`, `-3` and so on instead of overwriting it. It then adds or replaces only this package's entries. Running it again changes nothing.
 
