@@ -61,7 +61,7 @@ test('writeSettingsFile creates the folder and writes two-space JSON with a newl
   assert.equal(fs.existsSync(`${file}.claude-jev-advisor.tmp`), false);
 });
 
-test('a failed rename leaves no temp file and the original content', () => {
+test('a failed rename leaves no temp file and the original content', { skip: process.platform !== 'win32' && 'renaming over a read-only file fails only on Windows' }, () => {
   const file = path.join(tempDir(), 'settings.json');
   fs.writeFileSync(file, '{"a":1}');
   fs.chmodSync(file, 0o444);

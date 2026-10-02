@@ -63,3 +63,11 @@ test('without a user line, taking ours out removes the key; a user line alone is
   const user: Settings = { statusLine: { type: 'command', command: 'mine' } };
   assert.equal(applyStatusLineDisplay(user, home, null), user);
 });
+
+test('empty entries in the plugin folder list are dropped around ours, and left alone when nothing of ours is there', () => {
+  assert.equal((withModDisplay({ env: { CLAUDE_CODE_PLUGIN_DIRS: 'D:/my-mods;' } }, MOD, 'C:/d', ';').env as Record<string, string>).CLAUDE_CODE_PLUGIN_DIRS, `D:/my-mods;${MOD}`);
+  assert.equal((withModDisplay({ env: { CLAUDE_CODE_PLUGIN_DIRS: '' } }, MOD, 'C:/d', ';').env as Record<string, string>).CLAUDE_CODE_PLUGIN_DIRS, MOD);
+  assert.deepEqual(withoutModDisplay({ env: { CLAUDE_CODE_PLUGIN_DIRS: `;${MOD};;D:/x` } }, ';'), { env: { CLAUDE_CODE_PLUGIN_DIRS: 'D:/x' } });
+  const untouched: Settings = { env: { CLAUDE_CODE_PLUGIN_DIRS: 'D:/x;;' } };
+  assert.equal(withoutModDisplay(untouched, ';'), untouched);
+});

@@ -26,8 +26,8 @@ export function withoutModDisplay(settings: Settings, delimiter: string): Settin
   const dirs = env?.[PLUGIN_DIRS_ENV];
   if (env && typeof dirs === 'string') {
     const all = dirs.split(delimiter);
-    const kept = all.filter((dir) => !MOD_DIR_PATTERN.test(forwardSlashes(dir)));
-    if (kept.length !== all.length) {
+    if (all.some((dir) => MOD_DIR_PATTERN.test(forwardSlashes(dir)))) {
+      const kept = all.filter((dir) => dir !== '' && !MOD_DIR_PATTERN.test(forwardSlashes(dir)));
       const { [PLUGIN_DIRS_ENV]: _ours, ...otherEnv } = env;
       const nextEnv = kept.length ? { ...env, [PLUGIN_DIRS_ENV]: kept.join(delimiter) } : otherEnv;
       next = Object.keys(nextEnv).length ? { ...next, env: nextEnv } : withoutKey(next, 'env');
@@ -44,11 +44,11 @@ export function withoutModDisplay(settings: Settings, delimiter: string): Settin
 export function withModDisplay(settings: Settings, modDir: string, dataDirPath: string, delimiter: string): Settings {
   const base = withoutModDisplay(settings, delimiter);
   const env = isRecord(base.env) ? base.env : {};
-  const dirs = typeof env[PLUGIN_DIRS_ENV] === 'string' && env[PLUGIN_DIRS_ENV] !== '' ? `${env[PLUGIN_DIRS_ENV]}${delimiter}` : '';
+  const dirs = typeof env[PLUGIN_DIRS_ENV] === 'string' ? (env[PLUGIN_DIRS_ENV] as string).split(delimiter).filter(Boolean) : [];
   const configs = isRecord(base.pluginConfigs) ? base.pluginConfigs : {};
   return {
     ...base,
-    env: { ...env, [PLUGIN_DIRS_ENV]: `${dirs}${forwardSlashes(modDir)}` },
+    env: { ...env, [PLUGIN_DIRS_ENV]: [...dirs, forwardSlashes(modDir)].join(delimiter) },
     pluginConfigs: { ...configs, [MOD_PLUGIN_NAME]: { options: { dataDir: forwardSlashes(dataDirPath) } } },
   };
 }

@@ -5,7 +5,7 @@ async function main(): Promise<void> {
   let raw = '';
   process.stdin.setEncoding('utf8');
   for await (const chunk of process.stdin) raw += chunk;
-  const out = runStatusLine(raw, { home: os.homedir(), runBefore: runBeforeCommand });
+  const out = await runStatusLine(raw, { home: os.homedir(), runBefore: (command, input) => runBeforeCommand(command, input) });
   if (out) process.stdout.write(out);
 }
 

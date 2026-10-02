@@ -128,7 +128,7 @@ test('install switches context back on', () => {
   assert.equal(readConfig(home).context.enabled, true);
 });
 
-test('a settings.json that cannot be saved does not lose the user status line', () => {
+test('a settings.json that cannot be saved does not lose the user status line', { skip: process.platform !== 'win32' && 'renaming over a read-only file fails only on Windows' }, () => {
   const home = tempHome();
   const userLine = { type: 'command', command: 'bash ~/my-status.sh' };
   writeSettings(home, { statusLine: userLine });
