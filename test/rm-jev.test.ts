@@ -7,7 +7,7 @@ import { DEFAULT_CONFIG, writeConfig, type Config } from '../src/config.js';
 import type { FetchFn } from '../src/jev.js';
 import { dataDir } from '../src/paths.js';
 import type { FactProbe } from '../src/rm/facts.js';
-import { RM_QUESTIONS, askNote, passMessage, rmJevRequest } from '../src/rm/judge.js';
+import { RM_QUESTIONS, askNote, lifts, passMessage, rmJevRequest } from '../src/rm/judge.js';
 import { runRmHook, type RmHookDeps } from '../src/rm/run.js';
 
 const PROJECT = 'C:\\workspace\\proj';
@@ -23,8 +23,10 @@ function setup(change: (c: Config) => Config = (c) => c): { home: string; transc
   const transcript = path.join(home, 'session.jsonl');
   const rows = [
     { type: 'user', timestamp: STARTED, origin: { kind: 'human' }, message: { content: '내보내기 고쳐 줘' } },
-    { type: 'assistant', timestamp: STARTED, message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'node export.mjs > out.json && head out.json' } }] } },
-    { type: 'assistant', timestamp: STARTED, message: { content: [{ type: 'tool_use', id: 't2', name: 'Write', input: { file_path: 'C:/workspace/proj/scratch/a.json', content: '{}' } }] } },
+    { type: 'assistant', timestamp: STARTED, cwd: PROJECT, message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'node export.mjs > out.json && head out.json' } }] } },
+    { type: 'assistant', timestamp: STARTED, cwd: PROJECT, message: { content: [{ type: 'tool_use', id: 't2', name: 'Write', input: { file_path: 'C:/workspace/proj/scratch/a.json', content: '{}' } }] } },
+    { type: 'assistant', timestamp: STARTED, cwd: PROJECT, message: { content: [{ type: 'tool_use', id: 't3', name: 'Write', input: { file_path: 'C:/workspace/proj/secret.env', content: 'TYPESAFE_API_KEY=ts-test-key' } }] } },
+    { type: 'user', timestamp: STARTED, message: { content: [{ type: 'tool_result', tool_use_id: 't3', content: 'ok' }] }, toolUseResult: { type: 'create' } },
     { type: 'user', timestamp: STARTED, message: { content: [{ type: 'tool_result', tool_use_id: 't2', content: 'ok' }] }, toolUseResult: { type: 'create' } },
   ];
   fs.writeFileSync(transcript, `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`);
@@ -85,6 +87,7 @@ test('a test file this session made passes when Jev is sure, with a line for the
   const [log] = logLines(home);
   assert.equal(log.helper, 'rm');
   assert.equal(log.decision, 'pass');
+  assert.equal(log.transcriptPath, transcript);
   assert.deepEqual(log.targets, [{ path: 'C:\\workspace\\proj\\out.json', shown: 'C:\\workspace\\proj\\out.json', kind: 'session', p: 0.93 }]);
   assert.equal(JSON.stringify(log).includes('ts-test-key'), false);
 });
@@ -175,7 +178,7 @@ test('the request cuts long tool calls and caps the folder sample', () => {
   const req = rmJevRequest('ignored', { path: 'C:\\p\\cache', folder: true, bornAt: 0, listing, tracked: false, ignored: true, existedBefore: false, createdBy: [] }, 'rm -rf cache', '');
   assert.deepEqual((req.state.target as Record<string, unknown>).files, 'more than 30');
   assert.equal(((req.state.target as Record<string, unknown>).sample as string[]).length, 10);
-  const long = rmJevRequest('session', { path: 'C:\\p\\a.txt', folder: false, bornAt: 0, listing: null, tracked: false, ignored: false, existedBefore: false, createdBy: [{ tool: 'Write', file: 'C:\\p\\a.txt', text: 'x'.repeat(2000), kind: 'create' }] }, 'rm a.txt', '');
+  const long = rmJevRequest('session', { path: 'C:\\p\\a.txt', folder: false, bornAt: 0, listing: null, tracked: false, ignored: false, existedBefore: false, createdBy: [{ tool: 'Write', file: 'C:\\p\\a.txt', text: 'x'.repeat(2000), kind: 'create', cwd: 'C:\\p' }] }, 'rm a.txt', '');
   assert.equal(((long.state.created_by as { input: string }[])[0].input).length, 600);
   assert.doesNotMatch(JSON.stringify(RM_QUESTIONS), /[가-힣]/);
 });
@@ -202,4 +205,23 @@ test('when gathering facts uses up the time budget, the ask stays and Jev is not
     assert.doesNotMatch(out.hookSpecificOutput.permissionDecisionReason, /Jev/, command);
   }
   assert.equal(bodies.length, 0);
+});
+
+test('the key never reaches the log, even when a file this session wrote holds it', async () => {
+  const { home, transcript } = setup();
+  const bodies: string[] = [];
+  const out = JSON.parse((await runRmHook(input(transcript, 'rm -f secret.env'), deps(home, jev([0.3], bodies)))) ?? '');
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'ask');
+  assert.equal(bodies.length, 1);
+  const text = fs.readFileSync(path.join(dataDir(home), 'log', '2026-10.jsonl'), 'utf8');
+  assert.equal(text.includes('ts-test-key'), false);
+  assert.match(text, /TYPESAFE_API_KEY=\[redacted\]/);
+});
+
+test('nothing is lifted without at least one judged target', () => {
+  assert.equal(lifts([], 0.8), false);
+  const item = { path: 'C:\\p\\a', shown: 'C:\\p\\a', kind: 'session' as const, p: 0.9 };
+  assert.equal(lifts([item], 0.8), true);
+  assert.equal(lifts([item, { ...item, p: null }], 0.8), false);
+  assert.equal(lifts([{ ...item, p: 0.8 }], 0.8), true);
 });

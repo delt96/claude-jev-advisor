@@ -72,6 +72,10 @@ export function rmJevRequest(kind: Candidate, facts: TargetFacts, command: strin
 const name = (item: JudgedTarget) => path.win32.basename(item.path);
 const prob = (p: number) => p.toFixed(2);
 
+export function lifts(items: JudgedTarget[], threshold: number): boolean {
+  return items.length > 0 && items.every((item) => item.p !== null && item.p >= threshold);
+}
+
 export function passMessage(lang: Lang, items: JudgedTarget[]): string {
   const kinds = new Set(items.map((i) => i.kind));
   const phrase = PASS[lang][kinds.size === 1 ? items[0].kind : 'mixed'];

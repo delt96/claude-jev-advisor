@@ -102,3 +102,11 @@ test('the report ends with the rm deletions Jev let through', () => {
   assert.match(lines[at + 1], /^ {2}\d{4}-\d{2}-\d{2} \d{2}:\d{2} {2}sess-rm- {2}C:\\p\\out\.json \(0\.93\), C:\\p\\\.angular \(0\.97\)$/);
   assert.equal(lines.length, at + 2);
 });
+
+test('answers that are not numbers are left out of the line instead of breaking the report', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-report-odd-'));
+  writeConfig(home, DEFAULT_CONFIG);
+  writeJsonl(path.join(dataDir(home), 'log', '2026-10.jsonl'), [stopRecord('sess-odd', iso(1), null, { jev: { answers: { unit_done: 0.91, phase_done: 'x' } } })]);
+  const lines = reportLines(home, NOW, 7);
+  assert.match(lines[1], /\/compact {2}unit 0\.91 {2}"" {2}-> transcript not found$/);
+});

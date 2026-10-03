@@ -62,3 +62,13 @@ test('a state that cannot be moved into place throws and leaves no temp file beh
   assert.throws(() => writeState(home, { sessionId: 's1', at: 1, size: 1, judgment: null }));
   assert.deepEqual(fs.readdirSync(stateDir(home)).filter((name) => name.endsWith('.tmp')), []);
 });
+
+test('appendLog replaces each secret, also in its JSON-escaped form, and ignores empty ones', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-files-secret-'));
+  const now = new Date(2026, 9, 3, 10, 0, 0);
+  appendLog(home, now, { note: 'key ts-abc and ts-"q"' }, ['ts-abc', 'ts-"q"', null, '']);
+  const line = fs.readFileSync(logFile(home, now), 'utf8');
+  assert.equal(line.includes('ts-abc'), false);
+  assert.equal(line.includes('ts-\\"q\\"'), false);
+  assert.equal(JSON.parse(line).note, 'key [redacted] and [redacted]');
+});

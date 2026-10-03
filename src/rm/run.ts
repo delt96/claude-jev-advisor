@@ -4,7 +4,7 @@ import { appendLog } from '../context/files.js';
 import { JEV_TIMEOUT_MS, callJev, readJevKey, type FetchFn } from '../jev.js';
 import { candidateKind, gatherFacts, readSessionLog, realFactProbe, type Candidate, type FactProbe, type TargetFacts } from './facts.js';
 import { decide, hookOutput, type Probe, type RmTarget } from './guard.js';
-import { askNote, passMessage, rmJevRequest, type JudgedTarget } from './judge.js';
+import { askNote, lifts, passMessage, rmJevRequest, type JudgedTarget } from './judge.js';
 
 export type RmHookDeps = {
   home: string;
@@ -33,16 +33,15 @@ type HookInput = {
 };
 type Judged = { items: JudgedTarget[]; calls: Record<string, unknown>[] };
 
-async function judgeTargets(targets: RmTarget[], input: HookInput, command: string, cwd: string, config: Config, deps: RmHookDeps, elapsed: () => number): Promise<Judged | null> {
-  if (targets.length > MAX_JEV_TARGETS || targets.some((t) => t.path === null)) return null;
-  const key = readJevKey(deps.env, config.keyFile);
-  if (!key || typeof input.transcript_path !== 'string') return null;
+async function judgeTargets(targets: RmTarget[], input: HookInput, command: string, key: string, config: Config, deps: RmHookDeps, elapsed: () => number): Promise<Judged | null> {
+  if (targets.length === 0 || targets.length > MAX_JEV_TARGETS || targets.some((t) => t.path === null)) return null;
+  if (typeof input.transcript_path !== 'string') return null;
   const session = readSessionLog(input.transcript_path);
   if (!session) return null;
   const found: { target: RmTarget; facts: TargetFacts; kind: Candidate }[] = [];
   for (const target of targets) {
     if (elapsed() > FACTS_BUDGET_MS) return null;
-    const facts = gatherFacts(target.path as string, cwd, session, deps.facts ?? realFactProbe, config.rm.maxDirFiles);
+    const facts = gatherFacts(target.path as string, session, deps.facts ?? realFactProbe, config.rm.maxDirFiles);
     const kind = facts ? candidateKind(facts, session.startedAt) : null;
     if (!facts || !kind) return null;
     found.push({ target, facts, kind });
@@ -80,26 +79,34 @@ export async function runRmHook(raw: string, deps: RmHookDeps): Promise<string |
   const result = decide({ command, cwd, home: deps.home, tmpdirs, env: deps.env, probe: deps.probe });
   if (!result) return null;
   if (result.decision !== 'ask' || !result.targets || !config.rm.jev) return hookOutput(result);
+  const key = readJevKey(deps.env, config.keyFile);
+  if (!key) return hookOutput(result);
   // Jev can only lift an ask; any failure on the way leaves the ask exactly as the guard decided it.
   let judged: Judged | null = null;
   try {
-    judged = await judgeTargets(result.targets, input, command, cwd, config, deps, () => now().getTime() - started);
+    judged = await judgeTargets(result.targets, input, command, key, config, deps, () => now().getTime() - started);
   } catch {
     judged = null;
   }
   if (!judged) return hookOutput(result);
-  const pass = judged.items.every((item) => item.p !== null && item.p >= config.rm.throwawayYes);
+  const pass = lifts(judged.items, config.rm.throwawayYes);
   try {
-    appendLog(deps.home, now(), {
-      helper: 'rm',
-      event: 'pre_tool_use',
-      sessionId: typeof input.session_id === 'string' ? input.session_id : null,
-      command,
-      cwd,
-      decision: pass ? 'pass' : 'ask',
-      targets: judged.items,
-      jev: judged.calls,
-    });
+    appendLog(
+      deps.home,
+      now(),
+      {
+        helper: 'rm',
+        event: 'pre_tool_use',
+        sessionId: typeof input.session_id === 'string' ? input.session_id : null,
+        transcriptPath: input.transcript_path,
+        command,
+        cwd,
+        decision: pass ? 'pass' : 'ask',
+        targets: judged.items,
+        jev: judged.calls,
+      },
+      [key],
+    );
   } catch {}
   if (pass) return JSON.stringify({ systemMessage: passMessage(config.lang, judged.items) });
   return hookOutput({ ...result, reason: `${result.reason}${askNote(config.lang, judged.items)}` });

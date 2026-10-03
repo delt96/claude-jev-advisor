@@ -204,3 +204,17 @@ test('a state that cannot be saved still leaves the log line of the Jev call', a
   assert.equal(log.reason, null);
   assert.deepEqual(log.judgment, { phase: 'unit_done', clear: true });
 });
+
+test('a request that contains the key is logged with the key replaced', async () => {
+  const home = setup();
+  const file = path.join(home, 'session.jsonl');
+  const entries = [
+    { type: 'user', isSidechain: false, origin: { kind: 'human' }, message: { role: 'user', content: '내 키는 ts-test-key 야' } },
+    { type: 'assistant', isSidechain: false, message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: REPLY }], usage: { input_tokens: 1, cache_read_input_tokens: 311999, cache_creation_input_tokens: 0 } } },
+  ];
+  fs.writeFileSync(file, `${entries.map((e) => JSON.stringify(e)).join('\n')}\n`);
+  await runContextHook('stop', stop(file), deps(home, jev(0.9, 0.2)));
+  const text = fs.readFileSync(path.join(dataDir(home), 'log', '2026-10.jsonl'), 'utf8');
+  assert.equal(text.includes('ts-test-key'), false);
+  assert.match(text, /내 키는 \[redacted\] 야/);
+});

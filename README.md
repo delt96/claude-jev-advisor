@@ -4,7 +4,7 @@ Unofficial helpers for [Claude Code](https://claude.com/claude-code), installed 
 
 What is sent to TypeSafe's Jev API (`api.typesafe.ai`):
 
-- `context`: your last three requests, each cut to its first 1,000 characters, and Claude's last reply, cut to its first and last 1,500 characters.
+- `context`: your last three requests (typed by you, or sent through a channel or from another Claude Code session), each cut to its first 1,000 characters, and Claude's last reply, cut to its first and last 1,500 characters.
 - `rm`: only for a delete it would otherwise ask about, and only when the target is a file this session made or a folder git ignores. It sends the path, the `rm` command and its description, up to three tool calls of this session that name the target (each cut to 600 characters), and for a folder up to ten of its file names.
 
 Not affiliated with Anthropic or TypeSafe.

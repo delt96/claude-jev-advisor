@@ -8,7 +8,7 @@ export const SESSION_LOG_MAX_BYTES = 32 * 1024 * 1024;
 export const CALLS_PER_TARGET = 3;
 
 export type CallKind = 'create' | 'change' | 'read' | 'shell';
-export type ToolCall = { tool: string; file: string | null; text: string; kind: CallKind };
+export type ToolCall = { tool: string; file: string | null; text: string; kind: CallKind; cwd: string | null };
 export type SessionLog = { startedAt: number; calls: ToolCall[] };
 export type FileEntry = { name: string; bornAt: number };
 export type Listing = { entries: FileEntry[]; more: boolean };
@@ -38,24 +38,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function callOf(tool: string, input: Record<string, unknown>, result: string | undefined): ToolCall | null {
+function callOf(tool: string, input: Record<string, unknown>, result: string | undefined, cwd: string | null): ToolCall | null {
   const text = (key: string) => (typeof input[key] === 'string' ? (input[key] as string) : '');
   switch (tool) {
     case 'Write':
-      return { tool, file: text('file_path'), text: text('content'), kind: result === 'create' ? 'create' : 'change' };
+      return { tool, file: text('file_path'), text: text('content'), kind: result === 'create' ? 'create' : 'change', cwd };
     case 'Edit':
-      return { tool, file: text('file_path'), text: text('new_string'), kind: 'change' };
+      return { tool, file: text('file_path'), text: text('new_string'), kind: 'change', cwd };
     case 'MultiEdit': {
       const edits = Array.isArray(input.edits) ? input.edits : [];
-      return { tool, file: text('file_path'), text: edits.map((e) => (isRecord(e) && typeof e.new_string === 'string' ? e.new_string : '')).join('\n'), kind: 'change' };
+      return { tool, file: text('file_path'), text: edits.map((e) => (isRecord(e) && typeof e.new_string === 'string' ? e.new_string : '')).join('\n'), kind: 'change', cwd };
     }
     case 'NotebookEdit':
-      return { tool, file: text('notebook_path'), text: text('new_source'), kind: 'change' };
+      return { tool, file: text('notebook_path'), text: text('new_source'), kind: 'change', cwd };
     case 'Read':
-      return { tool, file: text('file_path'), text: '', kind: 'read' };
+      return { tool, file: text('file_path'), text: '', kind: 'read', cwd };
     case 'Bash':
     case 'PowerShell':
-      return { tool, file: null, text: text('command'), kind: 'shell' };
+      return { tool, file: null, text: text('command'), kind: 'shell', cwd };
     default:
       return null;
   }
@@ -79,7 +79,7 @@ function toolCalls(entries: Entry[]): ToolCall[] {
     if (entry.type !== 'assistant' || entry.isSidechain === true || !isRecord(entry.message) || !Array.isArray(entry.message.content)) continue;
     for (const block of entry.message.content) {
       if (!isRecord(block) || block.type !== 'tool_use' || typeof block.name !== 'string' || !isRecord(block.input)) continue;
-      const call = callOf(block.name, block.input, typeof block.id === 'string' ? results.get(block.id) : undefined);
+      const call = callOf(block.name, block.input, typeof block.id === 'string' ? results.get(block.id) : undefined, typeof entry.cwd === 'string' ? entry.cwd : null);
       if (call) calls.push(call);
     }
   }
@@ -117,7 +117,8 @@ function shellRefs(target: string, cwd: string | null): string[] {
   return refs;
 }
 
-export function namesTarget(call: ToolCall, target: string, folder: boolean, cwd: string | null): boolean {
+// A relative name means a file in the folder the call ran in, which may not be the folder of the rm being checked.
+export function namesTarget(call: ToolCall, target: string, folder: boolean): boolean {
   const wanted = normalized(target);
   if (call.file !== null) {
     const file = normalized(call.file);
@@ -126,7 +127,7 @@ export function namesTarget(call: ToolCall, target: string, folder: boolean, cwd
   // The rm being checked is already in the transcript, and an earlier delete is no sign that Claude made the file.
   if (DELETING.test(call.text)) return false;
   const text = normalized(call.text);
-  return shellRefs(target, cwd).some((ref) => new RegExp(ref).test(text));
+  return shellRefs(target, call.cwd).some((ref) => new RegExp(ref).test(text));
 }
 
 type ShellCommand = { words: string[]; writes: string[] };
@@ -158,6 +159,8 @@ function shellCommands(text: string): ShellCommand[] {
     } else if (c === '\\') {
       word = (word ?? '') + (text[i + 1] ?? '');
       i += 1;
+    } else if (c === '#' && word === null) {
+      while (i + 1 < text.length && text[i + 1] !== '\n') i += 1;
     } else if (c === ' ' || c === '\t' || c === '\r') {
       endWord();
     } else if (c === '\n' || c === ';' || c === '|' || c === '(' || c === ')' || (c === '&' && text[i + 1] !== '>')) {
@@ -184,10 +187,10 @@ const pathWord = (word: string) =>
     .replace(/\/+$/, '')
     .toLowerCase();
 
-export function createsTarget(call: ToolCall, target: string, cwd: string | null): boolean {
+export function createsTarget(call: ToolCall, target: string): boolean {
   if (call.kind !== 'shell') return call.kind === 'create';
   const full = pathWord(target);
-  const relative = cwd === null ? '' : win.relative(cwd, target);
+  const relative = call.cwd === null ? '' : win.relative(call.cwd, target);
   const short = relative && !relative.startsWith('..') && !win.isAbsolute(relative) ? pathWord(relative) : null;
   let moved = false;
   // Only steps that visibly make the target count; after a cd, a relative name may mean another file.
@@ -204,10 +207,10 @@ export function createsTarget(call: ToolCall, target: string, cwd: string | null
   return false;
 }
 
-export function gatherFacts(target: string, cwd: string | null, session: SessionLog, probe: FactProbe, maxFiles: number): TargetFacts | null {
+export function gatherFacts(target: string, session: SessionLog, probe: FactProbe, maxFiles: number): TargetFacts | null {
   const info = probe.info(target);
   if (!info) return null;
-  const naming = session.calls.filter((call) => namesTarget(call, target, info.folder, cwd));
+  const naming = session.calls.filter((call) => namesTarget(call, target, info.folder));
   return {
     path: target,
     folder: info.folder,
@@ -217,7 +220,7 @@ export function gatherFacts(target: string, cwd: string | null, session: Session
     ignored: info.folder && probe.ignored(target),
     // Write, Edit and sed -i replace a file, which resets its Windows birth time, so the birth time alone cannot tell
     // a new file from an edited one: the first call that named the target must be the one that visibly created it.
-    existedBefore: naming.length === 0 || !createsTarget(naming[0], target, cwd),
+    existedBefore: naming.length === 0 || !createsTarget(naming[0], target),
     createdBy: naming.length <= CALLS_PER_TARGET ? naming : [naming[0], ...naming.slice(1 - CALLS_PER_TARGET)],
   };
 }
@@ -249,19 +252,21 @@ export const realFactProbe: FactProbe = {
   },
   list(dir, limit) {
     const entries: FileEntry[] = [];
+    let seen = 0;
     let more = false;
+    // Folders count toward the limit too, so a tree of many empty folders cannot hold the hook past its time.
     const walk = (folder: string, prefix: string): void => {
       for (const item of fs.readdirSync(folder, { withFileTypes: true })) {
         if (more) return;
+        if (seen >= limit) {
+          more = true;
+          return;
+        }
+        seen += 1;
         const full = path.join(folder, item.name);
         const name = prefix ? `${prefix}/${item.name}` : item.name;
-        if (item.isDirectory()) {
-          walk(full, name);
-        } else if (entries.length >= limit) {
-          more = true;
-        } else {
-          entries.push({ name, bornAt: bornAt(fs.lstatSync(full)) });
-        }
+        if (item.isDirectory()) walk(full, name);
+        else entries.push({ name, bornAt: bornAt(fs.lstatSync(full)) });
       }
     };
     try {
@@ -272,6 +277,8 @@ export const realFactProbe: FactProbe = {
     }
   },
   tracked(p) {
+    // A repository of its own inside the target is never a throwaway, and git asked from the parent cannot see it.
+    if (fs.existsSync(path.join(p, '.git'))) return true;
     // Windows paths are case-insensitive but git pathspecs are not; check-ignore refuses this setting, ls-files needs it.
     const r = git(['-C', win.dirname(p), 'ls-files', '--', p], { GIT_ICASE_PATHSPECS: '1' });
     if (r.status === 0) return r.stdout.trim() !== '';
@@ -279,6 +286,7 @@ export const realFactProbe: FactProbe = {
     return !(r.status === 128 && /not a git repository/i.test(r.stderr ?? ''));
   },
   ignored(p) {
+    if (fs.existsSync(path.join(p, '.git'))) return false;
     return git(['-C', win.dirname(p), 'check-ignore', '-q', '--', p]).status === 0;
   },
 };

@@ -57,8 +57,13 @@ export function logFile(home: string, now: Date): string {
   return path.join(logDir(home), `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}.jsonl`);
 }
 
-export function appendLog(home: string, now: Date, record: Record<string, unknown>): void {
+export function appendLog(home: string, now: Date, record: Record<string, unknown>, secrets: (string | null)[] = []): void {
   const file = logFile(home, now);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, `${JSON.stringify({ at: now.toISOString(), ...record })}\n`);
+  let line = JSON.stringify({ at: now.toISOString(), ...record });
+  for (const secret of secrets) {
+    if (!secret) continue;
+    for (const form of [secret, JSON.stringify(secret).slice(1, -1)]) line = line.split(form).join('[redacted]');
+  }
+  fs.appendFileSync(file, `${line}\n`);
 }

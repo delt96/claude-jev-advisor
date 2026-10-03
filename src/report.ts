@@ -137,6 +137,7 @@ function outcomeText(outcome: Outcome): string {
 function answersText(answers: Record<string, number> | null): string {
   if (!answers) return '';
   return Object.entries(answers)
+    .filter(([, p]) => typeof p === 'number')
     .map(([id, p]) => `${id.replace(/_done$/, '')} ${p.toFixed(2)}`)
     .join(' ');
 }

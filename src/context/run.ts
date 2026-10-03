@@ -57,6 +57,7 @@ export async function runContextHook(event: ContextEvent, raw: string, deps: Con
   let judgment: Judgment | null = null;
   let reason: string | null = null;
   let jev: Record<string, unknown> | null = null;
+  let key: string | null = null;
   if (size === null) {
     reason = 'unknown_size';
   } else if (size < config.context.minTokens) {
@@ -65,7 +66,7 @@ export async function runContextHook(event: ContextEvent, raw: string, deps: Con
     reason = 'background_tasks';
     judgment = { phase: 'working', clear: false };
   } else {
-    const key = readJevKey(deps.env, config.keyFile);
+    key = readJevKey(deps.env, config.keyFile);
     if (!key) {
       reason = 'no_key';
     } else {
@@ -88,7 +89,7 @@ export async function runContextHook(event: ContextEvent, raw: string, deps: Con
     // A state that cannot be saved must not also lose the log line of a Jev call already made.
   }
   const advice = adviceKind(size, judgment, config);
-  appendLog(deps.home, at, { helper: 'context', event: 'stop', sessionId, transcriptPath, size, replySeen, waitedMs, background, reason, judgment, advice, jev });
+  appendLog(deps.home, at, { helper: 'context', event: 'stop', sessionId, transcriptPath, size, replySeen, waitedMs, background, reason, judgment, advice, jev }, [key]);
   if (config.display !== 'message' || !advice) return null;
   return JSON.stringify({ systemMessage: adviceLine({ size, threshold: null, judgment, config }) });
 }
