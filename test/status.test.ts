@@ -24,6 +24,8 @@ test('installed with the hook file present, and switched off', () => {
   install({ home, features: ['rm'], distDir, platform: 'win32', now: NOW });
   assert.ok(statusLines(home).includes('rm: installed, on'));
   assert.equal(statusLines(home).some((l) => l.includes('broken')), false);
+  assert.ok(statusLines(home, {}).includes('  jev: on, lifts the ask from 0.8 (no key - every real file asks)'));
+  assert.ok(statusLines(home, { TYPESAFE_API_KEY: 'ts-x' }).includes('  jev: on, lifts the ask from 0.8'));
   setEnabled(home, ['rm'], false);
   assert.ok(statusLines(home).includes('rm: installed, off'));
 });

@@ -1,6 +1,6 @@
 {
   "name": "jev-advisor",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Bottom-row compact/clear advice from @delt/claude-jev-advisor (unofficial)",
   "author": { "name": "delt96" },
   "userConfig": {

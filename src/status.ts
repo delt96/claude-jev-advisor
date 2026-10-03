@@ -45,6 +45,7 @@ function contextLines(home: string, settings: Settings, config: Config, env: Rec
     `  display: ${config.display}${displaySetUp(settings, config) ? '' : ` (not set up in settings.json - run "claude-jev-advisor install context --display ${config.display}")`}`,
     `  key: ${readJevKey(env, config.keyFile) ? 'set' : 'missing'}`,
     `  thresholds: judge from ${formatSize(c.minTokens)}, /compact from ${formatSize(c.compactMinTokens)}, red at ${c.redRemainingPct}% left`,
+    `  Jev: work done from ${c.unitDoneYes}, stage done (/clear) from ${c.phaseDoneYes}`,
   ];
   const last = newestState(home);
   if (last) {
@@ -52,6 +53,12 @@ function contextLines(home: string, settings: Settings, config: Config, env: Rec
     lines.push(`  last judgment: ${new Date(last.at).toISOString()} ${line}`);
   }
   return lines;
+}
+
+function rmJevLine(config: Config, env: Record<string, string | undefined>): string {
+  if (!config.rm.jev) return '  jev: off';
+  const key = readJevKey(env, config.keyFile) ? '' : ' (no key - every real file asks)';
+  return `  jev: on, lifts the ask from ${config.rm.throwawayYes}${key}`;
 }
 
 export function statusLines(home: string, env: Record<string, string | undefined> = process.env): string[] {
@@ -78,6 +85,7 @@ export function statusLines(home: string, env: Record<string, string | undefined
       }
     }
     if (feature === 'context') lines.push(...contextLines(home, settings, config, env));
+    if (feature === 'rm') lines.push(rmJevLine(config, env));
   }
   if (findCommands(settings, LEGACY_RM_GUARD).length) {
     lines.push('legacy rm-guard hook (~/.claude/hooks/rm-guard) is still registered - "claude-jev-advisor install rm" replaces it');

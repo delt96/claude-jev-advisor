@@ -141,6 +141,18 @@ function answersText(answers: Record<string, number> | null): string {
     .join(' ');
 }
 
+export function rmLines(home: string, now: Date, days: number): string[] {
+  const records = readLogRecords(home, new Date(now.getTime() - days * DAY_MS), now).filter((r) => r.helper === 'rm');
+  const passed = records.filter((r) => r.decision === 'pass');
+  const lines = [`rm deletions Jev let through: ${passed.length} (asked anyway after a Jev check: ${records.length - passed.length})`];
+  for (const record of passed) {
+    const targets = Array.isArray(record.targets) ? record.targets.filter(isRecord) : [];
+    const listed = targets.map((t) => `${String(t.shown)} (${typeof t.p === 'number' ? t.p.toFixed(2) : '?'})`).join(', ');
+    lines.push(`  ${localTime(new Date(record.at as string))}  ${String(record.sessionId ?? '').slice(0, 8)}  ${listed}`);
+  }
+  return lines;
+}
+
 export function reportLines(home: string, now: Date, days: number): string[] {
   const rows = adviceRows(home, now, days);
   const lines = [`Advice shown in the last ${days} day${days === 1 ? '' : 's'}: ${rows.length}`];
@@ -156,5 +168,5 @@ export function reportLines(home: string, now: Date, days: number): string[] {
       `/${advice}: ${mine.length} - compacted ${count('compact')}, cleared ${count('clear')}, auto-compacted ${count('auto_compact')}, kept going ${count('kept')}, unknown ${count('unknown')}`,
     );
   }
-  return lines;
+  return [...lines, ...rmLines(home, now, days)];
 }
