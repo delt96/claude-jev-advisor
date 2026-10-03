@@ -218,3 +218,31 @@ test('a request that contains the key is logged with the key replaced', async ()
   assert.equal(text.includes('ts-test-key'), false);
   assert.match(text, /내 키는 \[redacted\] 야/);
 });
+
+test('a key cut in half at the end of a long request never leaves its start in the request or the log', async () => {
+  const home = setup();
+  const file = path.join(home, 'session.jsonl');
+  const entries = [
+    { type: 'user', isSidechain: false, origin: { kind: 'human' }, message: { role: 'user', content: `${'x'.repeat(995)}ts-test-key` } },
+    { type: 'assistant', isSidechain: false, message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: REPLY }], usage: { input_tokens: 1, cache_read_input_tokens: 311999, cache_creation_input_tokens: 0 } } },
+  ];
+  fs.writeFileSync(file, `${entries.map((e) => JSON.stringify(e)).join('\n')}\n`);
+  const calls: string[] = [];
+  await runContextHook('stop', stop(file), deps(home, jev(0.9, 0.2, calls)));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].includes('ts-te'), false);
+  assert.equal(fs.readFileSync(path.join(dataDir(home), 'log', '2026-10.jsonl'), 'utf8').includes('ts-te'), false);
+});
+
+test('a key in the environment and a different one in the key file are both kept out of the log', async () => {
+  const home = setup();
+  const file = path.join(home, 'session.jsonl');
+  const entries = [
+    { type: 'user', isSidechain: false, origin: { kind: 'human' }, message: { role: 'user', content: '파일 키 ts-test-key, 환경 키 ts-env-key' } },
+    { type: 'assistant', isSidechain: false, message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: REPLY }], usage: { input_tokens: 1, cache_read_input_tokens: 311999, cache_creation_input_tokens: 0 } } },
+  ];
+  fs.writeFileSync(file, `${entries.map((e) => JSON.stringify(e)).join('\n')}\n`);
+  await runContextHook('stop', stop(file), { ...deps(home, jev(0.9, 0.2)), env: { TYPESAFE_API_KEY: 'ts-env-key' } });
+  const text = fs.readFileSync(path.join(dataDir(home), 'log', '2026-10.jsonl'), 'utf8');
+  assert.equal(text.includes('ts-test-key') || text.includes('ts-env-key'), false);
+});

@@ -11,7 +11,7 @@ export type CallKind = 'create' | 'change' | 'read' | 'shell';
 export type ToolCall = { tool: string; file: string | null; text: string; kind: CallKind; cwd: string | null };
 export type SessionLog = { startedAt: number; calls: ToolCall[] };
 export type FileEntry = { name: string; bornAt: number };
-export type Listing = { entries: FileEntry[]; more: boolean };
+export type Listing = { entries: FileEntry[]; more: boolean; repo: boolean };
 export type FactProbe = {
   info(p: string): { folder: boolean; bornAt: number } | null;
   list(dir: string, limit: number): Listing | null;
@@ -33,6 +33,7 @@ export type Candidate = 'session' | 'ignored';
 const win = path.win32;
 const DELETING = /\b(?:rm|rmdir|del|erase|rd|ri|Remove-Item|xargs)\b/i;
 const GIT_LOCATION_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'];
+const CHANGES_FOLDER = /(^|[\s;&|(])(?:cd|pushd|popd|chdir|Set-Location|sl)(?=\s|$)/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -75,12 +76,21 @@ function resultTypes(entries: Entry[]): Map<string, string> {
 function toolCalls(entries: Entry[]): ToolCall[] {
   const results = resultTypes(entries);
   const calls: ToolCall[] = [];
+  let message: unknown;
+  let moved = false;
   for (const entry of entries) {
     if (entry.type !== 'assistant' || entry.isSidechain === true || !isRecord(entry.message) || !Array.isArray(entry.message.content)) continue;
+    if (entry.message.id === undefined || entry.message.id !== message) moved = false;
+    message = entry.message.id;
+    // Every entry of one message carries the folder the message started in; after a cd in one of its calls, the
+    // later calls ran somewhere else, so they count only by full paths.
+    const cwd = typeof entry.cwd === 'string' ? entry.cwd : null;
     for (const block of entry.message.content) {
       if (!isRecord(block) || block.type !== 'tool_use' || typeof block.name !== 'string' || !isRecord(block.input)) continue;
-      const call = callOf(block.name, block.input, typeof block.id === 'string' ? results.get(block.id) : undefined, typeof entry.cwd === 'string' ? entry.cwd : null);
-      if (call) calls.push(call);
+      const call = callOf(block.name, block.input, typeof block.id === 'string' ? results.get(block.id) : undefined, moved ? null : cwd);
+      if (!call) continue;
+      calls.push(call);
+      if (call.kind === 'shell' && CHANGES_FOLDER.test(call.text)) moved = true;
     }
   }
   return calls;
@@ -229,7 +239,7 @@ export function candidateKind(facts: TargetFacts, startedAt: number): Candidate 
   const fresh = (bornAt: number) => bornAt >= startedAt;
   const freshInside = !facts.folder || (facts.listing !== null && !facts.listing.more && facts.listing.entries.every((e) => fresh(e.bornAt)));
   if (!facts.tracked && !facts.existedBefore && facts.createdBy.length > 0 && fresh(facts.bornAt) && freshInside) return 'session';
-  if (facts.folder && facts.ignored) return 'ignored';
+  if (facts.folder && facts.ignored && !facts.listing?.repo) return 'ignored';
   return null;
 }
 
@@ -254,6 +264,7 @@ export const realFactProbe: FactProbe = {
     const entries: FileEntry[] = [];
     let seen = 0;
     let more = false;
+    let repo = false;
     // Folders count toward the limit too, so a tree of many empty folders cannot hold the hook past its time.
     const walk = (folder: string, prefix: string): void => {
       for (const item of fs.readdirSync(folder, { withFileTypes: true })) {
@@ -263,6 +274,7 @@ export const realFactProbe: FactProbe = {
           return;
         }
         seen += 1;
+        if (item.name === '.git') repo = true;
         const full = path.join(folder, item.name);
         const name = prefix ? `${prefix}/${item.name}` : item.name;
         if (item.isDirectory()) walk(full, name);
@@ -271,7 +283,7 @@ export const realFactProbe: FactProbe = {
     };
     try {
       walk(dir, '');
-      return { entries, more };
+      return { entries, more, repo };
     } catch {
       return null;
     }

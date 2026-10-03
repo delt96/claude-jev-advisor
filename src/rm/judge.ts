@@ -53,15 +53,15 @@ const NOTE: Record<Lang, Record<Candidate | 'none', string>> = {
   en: { session: 'chance it is a test file', ignored: 'chance it can be made again', none: 'no answer' },
 };
 
-export function rmJevRequest(kind: Candidate, facts: TargetFacts, command: string, description: string): JevRequest {
+export function rmJevRequest(kind: Candidate, facts: TargetFacts, command: string, description: string, clean = (text: string) => text): JevRequest {
   const target: Record<string, unknown> = { path: facts.path, kind: facts.folder ? 'folder' : 'file' };
   if (facts.listing) {
     target.files = facts.listing.more ? `more than ${facts.listing.entries.length}` : facts.listing.entries.length;
     target.sample = facts.listing.entries.slice(0, SAMPLE_FILES).map((e) => e.name);
   }
-  const state: Record<string, unknown> = { target, command, description };
+  const state: Record<string, unknown> = { target, command: clean(command), description: clean(description) };
   if (kind === 'session') {
-    state.created_by = facts.createdBy.map((c) => ({ tool: c.tool, input: (c.file ? `${c.file}\n${c.text}` : c.text).slice(0, CALL_EXCERPT_CHARS) }));
+    state.created_by = facts.createdBy.map((c) => ({ tool: c.tool, input: clean(c.file ? `${c.file}\n${c.text}` : c.text).slice(0, CALL_EXCERPT_CHARS) }));
     state.git = 'untracked';
   } else {
     state.git = 'ignored';

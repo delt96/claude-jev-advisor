@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { JEV_URL, callJev, readJevKey, type FetchFn, type JevRequest } from '../src/jev.js';
+import { JEV_URL, callJev, jevKeys, readJevKey, withoutKeys, type FetchFn, type JevRequest } from '../src/jev.js';
 
 const REQUEST: JevRequest = {
   state: { note: 'hello' },
@@ -107,4 +107,14 @@ test('a key that straddles the 300-character cut of an error body is still blank
   assert.ok('error' in r);
   assert.equal(r.error.includes('ts-0123'), false);
   assert.ok(r.error.length <= 300);
+});
+
+test('jevKeys lists the environment key and the key file key once each, and withoutKeys removes them', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-jevkeys-'));
+  const keyFile = path.join(dir, 'jev-key.env');
+  fs.writeFileSync(keyFile, 'TYPESAFE_API_KEY=ts-file\n');
+  assert.deepEqual(jevKeys({ TYPESAFE_API_KEY: 'ts-env' }, keyFile), ['ts-env', 'ts-file']);
+  assert.deepEqual(jevKeys({ TYPESAFE_API_KEY: 'ts-file' }, keyFile), ['ts-file']);
+  assert.deepEqual(jevKeys({}, null), []);
+  assert.equal(withoutKeys('a ts-env b ts-file', ['ts-env', 'ts-file']), 'a [redacted] b [redacted]');
 });

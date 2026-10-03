@@ -39,7 +39,7 @@ const input = (transcript: string, command: string, description = 'Clean up the 
 function facts(over: Partial<FactProbe> = {}): FactProbe {
   return {
     info: (p) => ({ folder: p.endsWith('scratch') || p.endsWith('.angular'), bornAt: AFTER }),
-    list: () => ({ entries: [{ name: 'a.json', bornAt: AFTER }], more: false }),
+    list: () => ({ entries: [{ name: 'a.json', bornAt: AFTER }], more: false, repo: false }),
     tracked: () => false,
     ignored: (p) => p.endsWith('.angular'),
     ...over,
@@ -174,7 +174,7 @@ test('a deny is never sent to Jev', async () => {
 });
 
 test('the request cuts long tool calls and caps the folder sample', () => {
-  const listing = { entries: Array.from({ length: 30 }, (_, i) => ({ name: `f${i}`, bornAt: 0 })), more: true };
+  const listing = { entries: Array.from({ length: 30 }, (_, i) => ({ name: `f${i}`, bornAt: 0 })), more: true, repo: false };
   const req = rmJevRequest('ignored', { path: 'C:\\p\\cache', folder: true, bornAt: 0, listing, tracked: false, ignored: true, existedBefore: false, createdBy: [] }, 'rm -rf cache', '');
   assert.deepEqual((req.state.target as Record<string, unknown>).files, 'more than 30');
   assert.equal(((req.state.target as Record<string, unknown>).sample as string[]).length, 10);
@@ -224,4 +224,17 @@ test('nothing is lifted without at least one judged target', () => {
   assert.equal(lifts([item], 0.8), true);
   assert.equal(lifts([item, { ...item, p: null }], 0.8), false);
   assert.equal(lifts([{ ...item, p: 0.8 }], 0.8), true);
+});
+
+test('a key cut in half by an excerpt never leaves its start in the request or the log', async () => {
+  const { home, transcript } = setup();
+  const rows = fs.readFileSync(transcript, 'utf8');
+  const write = { type: 'assistant', timestamp: STARTED, cwd: PROJECT, message: { content: [{ type: 'tool_use', id: 't9', name: 'Write', input: { file_path: 'C:/workspace/proj/dump.txt', content: `${'y'.repeat(560)}ts-test-key` } }] } };
+  const made = { type: 'user', timestamp: STARTED, message: { content: [{ type: 'tool_result', tool_use_id: 't9', content: 'ok' }] }, toolUseResult: { type: 'create' } };
+  fs.writeFileSync(transcript, `${rows}${JSON.stringify(write)}\n${JSON.stringify(made)}\n`);
+  const bodies: string[] = [];
+  await runRmHook(input(transcript, 'rm -f dump.txt'), deps(home, jev([0.3], bodies)));
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].includes('ts-test'), false);
+  assert.equal(fs.readFileSync(path.join(dataDir(home), 'log', '2026-10.jsonl'), 'utf8').includes('ts-test'), false);
 });

@@ -30,6 +30,14 @@ export function readJevKey(env: Record<string, string | undefined>, keyFile: str
   return key || null;
 }
 
+export function jevKeys(env: Record<string, string | undefined>, keyFile: string | null): string[] {
+  return [...new Set([readJevKey(env, keyFile), readJevKey({}, keyFile)].filter((key): key is string => Boolean(key)))];
+}
+
+export function withoutKeys(text: string, keys: string[]): string {
+  return keys.reduce((out, key) => out.split(key).join('[redacted]'), text);
+}
+
 export async function callJev(request: JevRequest, opts: { key: string; fetchFn?: FetchFn; timeoutMs?: number; now?: () => number }): Promise<JevResult> {
   const now = opts.now ?? Date.now;
   const fetchFn = opts.fetchFn ?? (fetch as unknown as FetchFn);

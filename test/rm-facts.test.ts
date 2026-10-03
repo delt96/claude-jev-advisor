@@ -114,7 +114,7 @@ test('writing a file inside a folder names the folder', () => {
 function fakeProbe(over: Partial<FactProbe> = {}): FactProbe {
   return {
     info: () => ({ folder: false, bornAt: START + 1000 }),
-    list: () => ({ entries: [], more: false }),
+    list: () => ({ entries: [], more: false, repo: false }),
     tracked: () => false,
     ignored: () => false,
     ...over,
@@ -217,7 +217,7 @@ test('a session test file must be untracked, named by a call of this session and
 });
 
 test('a session folder also needs every file inside made in the session, and no more files than the limit', () => {
-  const folder = (entries: number[], more = false) => facts({ folder: true, listing: { entries: entries.map((t, i) => ({ name: `f${i}`, bornAt: t })), more } });
+  const folder = (entries: number[], more = false) => facts({ folder: true, listing: { entries: entries.map((t, i) => ({ name: `f${i}`, bornAt: t })), more, repo: false } });
   assert.equal(candidateKind(folder([START + 5, START + 9]), START), 'session');
   assert.equal(candidateKind(folder([START + 5, START - 9]), START), null);
   assert.equal(candidateKind(folder([START + 5], true), START), null);
@@ -225,7 +225,8 @@ test('a session folder also needs every file inside made in the session, and no 
 });
 
 test('a folder git ignores is the other candidate, whatever its age; a single ignored file is not', () => {
-  assert.equal(candidateKind(facts({ folder: true, ignored: true, createdBy: [], bornAt: 0, listing: { entries: [], more: true } }), START), 'ignored');
+  assert.equal(candidateKind(facts({ folder: true, ignored: true, createdBy: [], bornAt: 0, listing: { entries: [], more: true, repo: false } }), START), 'ignored');
+  assert.equal(candidateKind(facts({ folder: true, ignored: true, createdBy: [], bornAt: 0, listing: { entries: [], more: false, repo: true } }), START), null);
   assert.equal(candidateKind(facts({ folder: false, ignored: true, existedBefore: true }), START), null);
 });
 
@@ -270,6 +271,34 @@ test('a repository of its own counts as tracked and never as an ignored cache', 
 test('folders count toward the listing limit, so a tree of empty folders stops early', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-facts-tree-'));
   for (const name of ['a', 'b', 'c']) fs.mkdirSync(path.join(root, name));
-  assert.deepEqual(realFactProbe.list(root, 2), { entries: [], more: true });
-  assert.deepEqual(realFactProbe.list(root, 3), { entries: [], more: false });
+  assert.deepEqual(realFactProbe.list(root, 2), { entries: [], more: true, repo: false });
+  assert.deepEqual(realFactProbe.list(root, 3), { entries: [], more: false, repo: false });
+});
+
+test('after a cd in one call, the later calls of the same message count only by full paths', () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cja-facts-cd-')), 's.jsonl');
+  const call = (message: string, id: string, command: string) => ({
+    type: 'assistant',
+    cwd: 'C:\\proj',
+    timestamp: '2026-10-03T01:05:00.000Z',
+    message: { id: message, content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] },
+  });
+  const rows = [
+    { type: 'user', timestamp: '2026-10-03T01:00:00.000Z', origin: { kind: 'human' }, message: { content: 'go' } },
+    call('m1', 'b1', 'cd docs'),
+    call('m1', 'b2', 'echo hi > notes.md'),
+    call('m2', 'b3', 'echo hi > other.md'),
+  ];
+  fs.writeFileSync(file, `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`);
+  const session = readSessionLog(file);
+  assert.deepEqual(session?.calls.map((c) => c.cwd), ['C:\\proj', null, 'C:\\proj']);
+  assert.equal(gatherFacts('C:\\proj\\notes.md', session!, fakeProbe(), 50)?.existedBefore, true);
+});
+
+test('a git repository or worktree inside an ignored folder keeps it from being judged as a cache', { skip: process.platform !== 'win32' && 'the rm helper runs on Windows only' }, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-facts-worktrees-'));
+  fs.mkdirSync(path.join(root, 'feat'));
+  fs.writeFileSync(path.join(root, 'feat', '.git'), 'gitdir: C:/somewhere/.git/worktrees/feat');
+  fs.writeFileSync(path.join(root, 'feat', 'work.ts'), 'x');
+  assert.equal(realFactProbe.list(root, 50)?.repo, true);
 });

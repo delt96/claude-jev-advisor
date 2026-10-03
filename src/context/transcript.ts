@@ -71,12 +71,12 @@ export function requestText(entry: Entry): string {
   return messageText(isRecord(entry.message) ? entry.message.content : undefined).trim();
 }
 
-export function recentRequests(entries: Entry[], count = REQUEST_COUNT, maxChars = REQUEST_MAX_CHARS): string[] {
+export function recentRequests(entries: Entry[], count = REQUEST_COUNT, maxChars = REQUEST_MAX_CHARS, clean = (text: string) => text): string[] {
   const found: string[] = [];
   for (let i = entries.length - 1; i >= 0 && found.length < count; i--) {
     if (!isRequest(entries[i])) continue;
     const text = requestText(entries[i]);
-    if (text) found.push(text.slice(0, maxChars));
+    if (text) found.push(clean(text).slice(0, maxChars));
   }
   return found.reverse();
 }
@@ -95,11 +95,11 @@ export function replyWritten(entries: Entry[], reply: string): boolean {
   return false;
 }
 
-export function readTranscript(file: string, reply = '', limits = { start: TAIL_START_BYTES, max: TAIL_MAX_BYTES }): TranscriptFacts {
+export function readTranscript(file: string, reply = '', limits = { start: TAIL_START_BYTES, max: TAIL_MAX_BYTES }, clean = (text: string) => text): TranscriptFacts {
   for (let bytes = limits.start; ; bytes *= 2) {
     const { entries, whole } = readTail(file, Math.min(bytes, limits.max));
     const size = contextSize(entries);
-    const requests = recentRequests(entries);
+    const requests = recentRequests(entries, REQUEST_COUNT, REQUEST_MAX_CHARS, clean);
     if ((size !== null && requests.length >= REQUEST_COUNT) || whole || bytes >= limits.max) {
       return { size, requests, replySeen: replyWritten(entries, reply) };
     }
