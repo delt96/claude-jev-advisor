@@ -30,6 +30,21 @@ test('installed with the hook file present, and switched off', () => {
   assert.ok(statusLines(home).includes('rm: installed, off'));
 });
 
+test('an rm hook registered for Bash only says how to cover PowerShell', () => {
+  const home = tempHome();
+  const dist = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-jev-advisor-'));
+  const distDir = path.join(dist, 'claude-jev-advisor', 'dist');
+  fs.mkdirSync(distDir, { recursive: true });
+  fs.writeFileSync(path.join(distDir, 'rm-hook.js'), '');
+  const command = `node "${path.join(distDir, 'rm-hook.js').replace(/\\/g, '/')}"`;
+  fs.mkdirSync(path.dirname(settingsPath(home)), { recursive: true });
+  fs.writeFileSync(settingsPath(home), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command }] }] } }));
+  const warning = '  Bash only: run "claude-jev-advisor install rm" to cover PowerShell';
+  assert.ok(statusLines(home).includes(warning));
+  install({ home, features: ['rm'], distDir, platform: 'win32', now: NOW });
+  assert.equal(statusLines(home).includes(warning), false);
+});
+
 test('a hook pointing to a missing file is reported as broken', () => {
   const home = tempHome();
   install({ home, features: ['rm'], distDir: 'C:/gone/claude-jev-advisor/dist', platform: 'win32', now: NOW });

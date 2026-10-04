@@ -25,7 +25,7 @@ test('install on a machine without ~/.claude creates settings.json with the rm h
   const r = install(opts(home));
   assert.deepEqual(r.installed, ['rm']);
   assert.equal(r.backup, null);
-  assert.deepEqual(readSettings(home), { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: OUR_COMMAND, timeout: 15 }] }] } });
+  assert.deepEqual(readSettings(home), { hooks: { PreToolUse: [{ matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: OUR_COMMAND, timeout: 15 }] }] } });
   assert.equal(readConfig(home).rm.enabled, true);
 });
 
@@ -46,7 +46,7 @@ test('install replaces the legacy rm-guard, keeps everything else and backs up f
     hooks: {
       PreToolUse: [
         { matcher: 'Bash', hooks: [{ type: 'command', command: 'node mine.js' }] },
-        { matcher: 'Bash', hooks: [{ type: 'command', command: OUR_COMMAND, timeout: 15 }] },
+        { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: OUR_COMMAND, timeout: 15 }] },
       ],
       Stop: [{ hooks: [{ type: 'command', command: 'node stop.js' }] }],
     },
@@ -69,7 +69,7 @@ test('installing from a new location replaces the old entry', () => {
   const home = tempHome();
   install(opts(home, { distDir: 'C:/workspace/claude-jev-advisor/dist' }));
   install(opts(home));
-  assert.deepEqual(readSettings(home).hooks.PreToolUse, [{ matcher: 'Bash', hooks: [{ type: 'command', command: OUR_COMMAND, timeout: 15 }] }]);
+  assert.deepEqual(readSettings(home).hooks.PreToolUse, [{ matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: OUR_COMMAND, timeout: 15 }] }]);
 });
 
 test('rm is skipped outside Windows and settings are left alone', () => {
@@ -148,9 +148,16 @@ test('install keeps a user empty group and an empty event', () => {
   assert.deepEqual(readSettings(home), {
     hooks: {
       Notification: [{ matcher: '', hooks: [] }],
-      PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: OUR_COMMAND, timeout: 15 }] }],
+      PreToolUse: [{ matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: OUR_COMMAND, timeout: 15 }] }],
     },
   });
+});
+
+test('installing over an rm entry for Bash only widens it to PowerShell', () => {
+  const home = tempHome();
+  writeSettings(home, { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: OUR_COMMAND, timeout: 15 }] }] } });
+  install(opts(home));
+  assert.deepEqual(readSettings(home).hooks.PreToolUse, [{ matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: OUR_COMMAND, timeout: 15 }] }]);
 });
 
 test('install refuses a dist folder whose path does not contain claude-jev-advisor/dist and writes nothing', () => {

@@ -85,7 +85,12 @@ export function statusLines(home: string, env: Record<string, string | undefined
       }
     }
     if (feature === 'context') lines.push(...contextLines(home, settings, config, env));
-    if (feature === 'rm') lines.push(rmJevLine(config, env));
+    if (feature === 'rm') {
+      lines.push(rmJevLine(config, env));
+      if (!commands.some((c) => (c.matcher ?? '').split('|').includes('PowerShell'))) {
+        lines.push('  Bash only: run "claude-jev-advisor install rm" to cover PowerShell');
+      }
+    }
   }
   if (findCommands(settings, LEGACY_RM_GUARD).length) {
     lines.push('legacy rm-guard hook (~/.claude/hooks/rm-guard) is still registered - "claude-jev-advisor install rm" replaces it');

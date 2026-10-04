@@ -32,6 +32,27 @@ test('the input cwd is used, and the process cwd when it is missing', async () =
   assert.match((await runRmHook(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'rm a.ts' } }), deps(home)))!, /C:\\\\workspace\\\\proj\\\\a\.ts/);
 });
 
+test('PowerShell tool calls are checked too, and PowerShell only starts when the command has a delete word', async () => {
+  const home = tempHome();
+  let runs = 0;
+  const powershell = async () => {
+    runs++;
+    return JSON.stringify({ errors: false, anyVariable: false, unstable: [], items: [{ kind: 'delete', path: { const: 'src\\a.ts' }, literalPath: null, literal: false, dotnet: false, whatIf: false, bindError: false, inPipeline: false, ordered: true }] });
+  };
+  const ps = (command: string) => JSON.stringify({ tool_name: 'PowerShell', tool_input: { command }, cwd: 'C:\\workspace\\proj' });
+  const out = JSON.parse((await runRmHook(ps('Remove-Item src\\a.ts'), { ...deps(home), powershell }))!);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'ask');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /C:\\workspace\\proj\\src\\a\.ts/);
+  assert.equal(await runRmHook(ps('Get-ChildItem; git status'), { ...deps(home), powershell }), null);
+  assert.equal(runs, 1);
+});
+
+test('a PowerShell command that cannot be read asks instead of passing', async () => {
+  const out = JSON.parse((await runRmHook(JSON.stringify({ tool_name: 'PowerShell', tool_input: { command: 'Remove-Item x' } }), { ...deps(tempHome()), powershell: async () => null }))!);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'ask');
+  assert.equal(out.hookSpecificOutput.permissionDecisionReason, '삭제 명령을 분석하지 못함: Remove-Item x');
+});
+
 test('switched off, nothing is checked', async () => {
   const home = tempHome();
   writeConfig(home, { ...DEFAULT_CONFIG, rm: { ...DEFAULT_CONFIG.rm, enabled: false } });
@@ -51,6 +72,14 @@ test('the entry prints the decision for an unresolvable rm', () => {
   const r = runEntry(bash('rm -rf $(echo x)'), tempHome());
   assert.equal(r.status, 0);
   assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('the entry reads a PowerShell deletion with the real PowerShell', { skip: process.platform !== 'win32' && 'PowerShell parsing is checked on Windows only' }, () => {
+  const r = runEntry(JSON.stringify({ tool_name: 'PowerShell', tool_input: { command: 'Get-ChildItem *.log | Remove-Item' }, cwd: 'C:\\workspace\\proj' }), tempHome());
+  assert.equal(r.status, 0);
+  const out = JSON.parse(r.stdout).hookSpecificOutput;
+  assert.equal(out.permissionDecision, 'deny');
+  assert.match(out.permissionDecisionReason, /pipeline input feeding Remove-Item/);
 });
 
 test('the entry stays silent and exits 0 on empty or broken input', () => {

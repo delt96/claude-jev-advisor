@@ -92,6 +92,26 @@ test('a test file this session made passes when Jev is sure, with a line for the
   assert.equal(JSON.stringify(log).includes('ts-test-key'), false);
 });
 
+test('a PowerShell deletion of a test file this session made is judged the same way, and the log names the tool', async () => {
+  const { home, transcript } = setup();
+  const powershell = async () => JSON.stringify({ errors: false, anyVariable: false, unstable: [], items: [{ kind: 'delete', path: { const: 'out.json' }, literalPath: null, literal: false, dotnet: false, whatIf: false, bindError: false, inPipeline: false, ordered: true }] });
+  const ps = JSON.stringify({ session_id: 'sess-1', transcript_path: transcript, cwd: PROJECT, tool_name: 'PowerShell', tool_input: { command: 'Remove-Item out.json', description: 'Clean up' } });
+  const out = await runRmHook(ps, { ...deps(home, jev([0.93])), powershell });
+  assert.match(JSON.parse(out ?? '').systemMessage, /out\.json \(0\.93\)/);
+  await runRmHook(input(transcript, 'rm -f out.json'), deps(home, jev([0.93])));
+  assert.deepEqual(logLines(home).map((l) => l.tool), ['PowerShell', 'Bash']);
+});
+
+test('an ask that holds a PowerShell command nobody could read is never sent to Jev', async () => {
+  const { home, transcript } = setup();
+  const bodies: string[] = [];
+  const out = await runRmHook(input(transcript, 'rm -f out.json && powershell -c "Remove-Item x"'), { ...deps(home, jev([0.99], bodies)), powershell: async () => null });
+  const decision = JSON.parse(out ?? '').hookSpecificOutput;
+  assert.equal(decision.permissionDecision, 'ask');
+  assert.match(decision.permissionDecisionReason, /삭제 명령을 분석하지 못함: Remove-Item x/);
+  assert.deepEqual(bodies, []);
+});
+
 test('when Jev is not sure, or fails, the ask stays and says what Jev thought', async () => {
   const { home, transcript } = setup();
   const unsure = JSON.parse((await runRmHook(input(transcript, 'rm -f out.json'), deps(home, jev([0.42])))) ?? '');

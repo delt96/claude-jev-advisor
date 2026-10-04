@@ -4,7 +4,7 @@ export type Feature = (typeof FEATURES)[number];
 export type HookSpec = { event: string; matcher?: string; script: string; args: string[] };
 
 export const HOOK_SPECS: Record<Feature, HookSpec[]> = {
-  rm: [{ event: 'PreToolUse', matcher: 'Bash', script: 'rm-hook.js', args: [] }],
+  rm: [{ event: 'PreToolUse', matcher: 'Bash|PowerShell', script: 'rm-hook.js', args: [] }],
   context: [
     { event: 'Stop', script: 'context-hook.js', args: ['stop'] },
     { event: 'SessionEnd', script: 'context-hook.js', args: ['session-end'] },

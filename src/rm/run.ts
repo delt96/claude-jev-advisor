@@ -2,9 +2,11 @@ import path from 'node:path';
 import { readConfig, type Config } from '../config.js';
 import { appendLog } from '../context/files.js';
 import { JEV_TIMEOUT_MS, callJev, jevKeys, readJevKey, withoutKeys, type FetchFn } from '../jev.js';
+import { decideTool } from './dispatch.js';
 import { candidateKind, gatherFacts, readSessionLog, realFactProbe, type Candidate, type FactProbe, type TargetFacts } from './facts.js';
-import { decide, hookOutput, type Probe, type RmTarget } from './guard.js';
 import { askNote, lifts, passMessage, rmJevRequest, type JudgedTarget } from './judge.js';
+import { realPowerShell, type PowerShellRunner } from './powershell.js';
+import { hookOutput, type Probe, type RmTarget } from './targets.js';
 
 export type RmHookDeps = {
   home: string;
@@ -15,6 +17,7 @@ export type RmHookDeps = {
   facts?: FactProbe;
   fetchFn?: FetchFn;
   now?: () => Date;
+  powershell?: PowerShellRunner;
 };
 
 export const MAX_JEV_TARGETS = 5;
@@ -73,10 +76,12 @@ export async function runRmHook(raw: string, deps: RmHookDeps): Promise<string |
   const input = JSON.parse(raw) as HookInput | null;
   if (typeof input !== 'object' || input === null) return null;
   const command = input.tool_input?.command;
-  if (input.tool_name !== 'Bash' || typeof command !== 'string') return null;
+  const tool = input.tool_name;
+  if ((tool !== 'Bash' && tool !== 'PowerShell') || typeof command !== 'string') return null;
   const tmpdirs = [...new Set([deps.tmpdir, deps.env.TEMP, deps.env.TMP].filter((t): t is string => Boolean(t)).map((t) => path.win32.resolve(t)))];
   const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : deps.cwd;
-  const result = decide({ command, cwd, home: deps.home, tmpdirs, env: deps.env, probe: deps.probe });
+  const ctx = { cwd, home: deps.home, tmpdirs, env: deps.env, probe: deps.probe };
+  const result = await decideTool(tool, command, ctx, deps.powershell ?? realPowerShell(deps.env));
   if (!result) return null;
   if (result.decision !== 'ask' || !result.targets || !config.rm.jev) return hookOutput(result);
   const key = readJevKey(deps.env, config.keyFile);
@@ -100,6 +105,7 @@ export async function runRmHook(raw: string, deps: RmHookDeps): Promise<string |
         event: 'pre_tool_use',
         sessionId: typeof input.session_id === 'string' ? input.session_id : null,
         transcriptPath: input.transcript_path,
+        tool,
         command,
         cwd,
         decision: pass ? 'pass' : 'ask',
