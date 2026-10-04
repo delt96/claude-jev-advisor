@@ -1,6 +1,6 @@
 {
   "name": "@delt/claude-jev-advisor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Unofficial Claude Code helpers using TypeSafe Jev: compact/clear advice and an rm guard",
   "type": "module",
   "bin": {
