@@ -211,11 +211,11 @@ function toWindowsPath(word: Word, cwd: string | null, home: string, tmpdir: str
 }
 
 // Git Bash rewrites an argument that looks like a POSIX path before it starts a Windows program such as cmd or
-// powershell: /c/x becomes C:/x, /s becomes S:/, /tmp/x the temp folder and //c becomes /c; any other absolute path
-// points into Git's own folder.
+// powershell: /c/x becomes C:/x, /s becomes S:/, /tmp/x the temp folder and //c becomes /c, while //host/share and /?
+// pass unchanged; any other absolute path points into Git's own folder.
 function nativeArg(value: string | null, tmpdir: string): string | null {
-  if (value === null || !value.startsWith('/')) return value;
-  if (value.startsWith('//')) return value.slice(1);
+  if (value === null || !value.startsWith('/') || value === '/?') return value;
+  if (value.startsWith('//')) return /^\/\/[^/]*$/.test(value) ? value.slice(1) : value;
   const drive = /^\/([A-Za-z])(\/.*)?$/.exec(value);
   if (drive) return `${drive[1].toUpperCase()}:${drive[2] ?? '/'}`;
   const tmp = /^\/tmp(\/.*)?$/.exec(value);
