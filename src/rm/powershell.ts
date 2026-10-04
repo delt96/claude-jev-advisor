@@ -146,7 +146,9 @@ foreach ($s in $root.FindAll({ param($x) $x -is [System.Management.Automation.La
   foreach ($m in [regex]::Matches($s.Value, '\$\{?(?:\w+:)?([\w?]+)')) { [void]$named.Add($m.Groups[1].Value) }
   $parent = $s.Parent
   $at = if ($parent -is [System.Management.Automation.Language.CommandAst]) { $parent.CommandElements.IndexOf($s) } else { -1 }
-  if ($s.Value -match '^(?:[\w.]+\\)?(?:variable|env|environment):{1,2}[\\/]?(.+)$') { [void]$named.Add($Matches[1]) }
+  # A bare Variable: or Env: drive (New-Item -Path Env: -Name TEMP, Set-Location Variable:) writes names given elsewhere.
+  if ($s.Value -match '^(?:[\w.]+\\)?(?:variable|env|environment):{1,2}[\\/]?$') { $anyVariable = $true }
+  elseif ($s.Value -match '^(?:[\w.]+\\)?(?:variable|env|environment):{1,2}[\\/]?(.+)$') { [void]$named.Add($Matches[1]) }
   elseif (($at -gt 0 -and (NamesVariable $parent.CommandElements[$at - 1])) -or (NamesVariable $parent) -or ($parent -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $parent.Member -ne $s -and $parent.Member.Value -match 'variable|^set$|^get$')) {
     [void]$named.Add(($s.Value -replace '^\+', '' -replace '^(?:script|global|local|private):', ''))
   }

@@ -184,6 +184,9 @@ test('a variable whose name is handed to a command or a variable method as text,
     '$d = "$env:TEMP\\x"; (Get-Variable d).Value = "C:\\data"; Remove-Item $d -Recurse',
     '[Environment]::SetEnvironmentVariable("TEMP", "C:\\data"); Remove-Item "$env:TEMP\\x" -Recurse',
     '$PWD = "C:\\data"; Remove-Item "$PWD\\x" -Recurse',
+    '$d = "$env:TEMP\\x"; New-Item -Path Variable: -Name d -Value C:\\data -Force; Remove-Item $d -Recurse',
+    'New-Item -Path Env:\\ -Name TEMP -Value C:\\data -Force; Remove-Item "$env:TEMP\\x" -Recurse',
+    'Push-Location Env:; Set-Item TEMP C:\\data; Pop-Location; Remove-Item "$env:TEMP\\x" -Recurse',
   ];
   const results = await Promise.all(sources.map((source) => denied(source)));
   sources.forEach((source, i) => assert.match(results[i], /a variable that cannot be worked out/, source));
