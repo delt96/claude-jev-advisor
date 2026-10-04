@@ -222,3 +222,8 @@ test('an ask carries every real target, with a path only where one file or folde
 test('a wildcard right under a drive root is shown with one separator', () => {
   assert.equal(reason('rm -f /c/*.log'), '실제 파일 삭제: C:\\*.log');
 });
+
+test('a wildcard right under a root is read in that root, not in the current folder', () => {
+  assert.equal(reason('rm -f C:/*.log', { cwd: TMP }), '실제 파일 삭제: C:\\*.log');
+  assert.deepEqual(run('rm -f /*.log', { cwd: TMP }).result?.targets, [{ shown: '/*.log', path: null }]);
+});

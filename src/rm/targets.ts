@@ -27,7 +27,6 @@ function segments(p: string): string[] {
   return p.toLowerCase().split('\\');
 }
 
-// `p` is a full Windows path; `pattern` is a wildcard last part that was split off it, or null.
 export function judgePath(p: string, pattern: string | null, ctx: Pick<ReadCtx, 'tmpdirs' | 'probe'>): RmTarget | null {
   const shown = pattern === null ? p : `${p.replace(/\\$/, '')}\\${pattern}`;
   const narrowPattern = pattern !== null && !/^[*?.]+$/.test(pattern);
@@ -44,11 +43,15 @@ export function splitPattern(value: string, wildcard: RegExp): { dir: string; pa
   return { dir: value.slice(0, Math.max(cut, 0)) || '.', pattern: value.slice(cut + 1) };
 }
 
+// A name right under a root keeps the root as its folder (`C:\*.log`, `/*.log`), and `D:*.log` keeps its drive so
+// the drive-relative path is refused instead of being read in the current folder.
 export function splitWindowsPattern(value: string, wildcard: RegExp): { dir: string; pattern: string } | null {
+  const drive = /^([A-Za-z]:)([^\\/]*)$/.exec(value);
+  if (drive) return { dir: drive[1], pattern: drive[2] };
   const split = splitPattern(value, wildcard);
   if (split === null) return null;
-  const root = /^([A-Za-z]:)?[\\/][^\\/]*$/.exec(value);
-  return root ? { dir: `${root[1] ?? ''}\\`, pattern: split.pattern } : split;
+  const root = /^((?:[A-Za-z]:)?[\\/])[^\\/]*$/.exec(value);
+  return root ? { dir: root[1], pattern: split.pattern } : split;
 }
 
 // Windows path rules shared by cmd and PowerShell; Git Bash spellings such as /c/... are read in guard.ts.

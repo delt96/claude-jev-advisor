@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { decisionOf, denyReason, emptyRead, judgePath, splitPattern, type Probe, type ReadCtx, type ReadResult, type RmDecision, type RmTarget } from './targets.js';
+import { decisionOf, denyReason, emptyRead, judgePath, splitWindowsPattern, type Probe, type ReadCtx, type ReadResult, type RmDecision, type RmTarget } from './targets.js';
 
 export { hookOutput, realProbe, type Probe, type RmDecision, type RmTarget } from './targets.js';
 
@@ -17,7 +17,7 @@ type WordToken = Word & { type: 'word' };
 type Token = WordToken | { type: 'op'; value: string };
 type Command = { words: WordToken[]; after: string | null };
 type Vars = Map<string, string | null>;
-type Resolved = { path?: string; unknown?: string; unresolvable?: string };
+type BashPath = { path?: string; unknown?: string; unresolvable?: string };
 type Classified = { real?: RmTarget; unresolvable?: string };
 
 export type DecideInput = {
@@ -190,7 +190,7 @@ function stripPrefixes(words: WordToken[]): WordToken[] {
   }
 }
 
-function toWindowsPath(word: Word, cwd: string | null, home: string, tmpdir: string): Resolved {
+function toWindowsPath(word: Word, cwd: string | null, home: string, tmpdir: string): BashPath {
   const v = word.value;
   if (word.tilde && (v === '~' || v.startsWith('~/') || v.startsWith('~\\'))) return { path: win.resolve(home, v.slice(2) || '.') };
   if (/^[A-Za-z]:[\\/]/.test(v)) return { path: win.normalize(v) };
@@ -203,7 +203,6 @@ function toWindowsPath(word: Word, cwd: string | null, home: string, tmpdir: str
   return { path: win.resolve(cwd, v) };
 }
 
-
 function classify(target: WordToken, ctx: Ctx): Classified {
   if (target.brace) return { unresolvable: `brace expansion (${target.value})` };
   const value = expand(target, ctx.vars);
@@ -211,7 +210,7 @@ function classify(target: WordToken, ctx: Ctx): Classified {
   let w: Word = { ...target, value, dynamic: false };
   let pattern: string | null = null;
   if (target.glob) {
-    const split = splitPattern(value, /[*?[]/);
+    const split = splitWindowsPattern(value, /[*?[]/);
     if (split === null) return { unresolvable: `a wildcard in a folder name (${target.value})` };
     pattern = split.pattern;
     w = { ...w, value: split.dir };

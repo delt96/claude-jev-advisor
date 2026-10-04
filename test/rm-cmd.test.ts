@@ -83,3 +83,46 @@ test('shells started from cmd are handed back with their arguments and folder', 
   ]);
   assert.equal(result.deny, null);
 });
+
+test('a delete after if, for … do, call or start is found', () => {
+  assert.deepEqual(shown('if exist dist2 rmdir /s /q dist2'), ['C:\\workspace\\proj\\dist2']);
+  assert.deepEqual(shown('if /i not "%FOO%"=="x" del a.txt'), ['C:\\workspace\\proj\\a.txt']);
+  assert.deepEqual(shown('if exist a.txt (del a.txt) else (del b.txt)'), ['C:\\workspace\\proj\\a.txt', 'C:\\workspace\\proj\\b.txt']);
+  assert.deepEqual(shown('call del x.txt'), ['C:\\workspace\\proj\\x.txt']);
+  assert.deepEqual(shown('start "" /b del y.txt'), ['C:\\workspace\\proj\\y.txt']);
+  assert.match(denied('for %f in (*.txt) do del %f') ?? '', /a variable that cannot be worked out \(%f\)/);
+  assert.match(denied('for %%f in (*.txt) do (del %%f)') ?? '', /a variable that cannot be worked out/);
+  assert.deepEqual(shown('if exist a.txt echo found'), []);
+});
+
+test('a switch right after the name, cd.. and cd\\ are read the way cmd reads them', () => {
+  assert.deepEqual(shown('del/q x.txt'), ['C:\\workspace\\proj\\x.txt']);
+  assert.deepEqual(shown('rd/s/q old'), ['C:\\workspace\\proj\\old']);
+  assert.deepEqual(shown('cd.. & del x.txt'), ['C:\\workspace\\x.txt']);
+  assert.deepEqual(shown('cd\\ & del x.txt'), ['C:\\x.txt']);
+});
+
+test('parentheses inside a name belong to it, parentheses around a command make a block', () => {
+  assert.deepEqual(shown('del report(1).txt'), ['C:\\workspace\\proj\\report(1).txt']);
+  assert.deepEqual(shown('(del a.txt) & (del b.txt)'), ['C:\\workspace\\proj\\a.txt', 'C:\\workspace\\proj\\b.txt']);
+});
+
+test('del /s deletes the name in every subfolder, so it asks for it as a pattern', () => {
+  assert.deepEqual(read('del /s /q Thumbs.db', { exists: () => false }).targets, [{ shown: 'C:\\workspace\\proj\\Thumbs.db', path: null }]);
+  assert.deepEqual(read('erase /q /s x.txt').targets, [{ shown: 'C:\\workspace\\proj\\x.txt', path: null }]);
+  assert.deepEqual(shown('del /s /q %TEMP%\\x.tmp'), []);
+  assert.deepEqual(read('rd /s /q old').targets, [{ shown: 'C:\\workspace\\proj\\old', path: 'C:\\workspace\\proj\\old' }]);
+});
+
+test('a command name behind an unknown variable is still read, or refused when the line deletes', () => {
+  assert.deepEqual(read('"%ProgramFiles%\\Git\\bin\\bash.exe" -c "rm -rf x"').shells, [
+    { name: 'bash', args: ['-c', 'rm -rf x'], cwd: PROJECT, raw: '"%?%\\Git\\bin\\bash.exe" -c "rm -rf x"' },
+  ]);
+  assert.match(denied('%X% del a.txt') ?? '', /a command that cannot be worked out \(%\?%\)/);
+  assert.deepEqual(shown('%EDITOR% notes.txt & del y.txt'), ['C:\\workspace\\proj\\y.txt']);
+});
+
+test('%CD% is the folder the line started in, and a drive-relative wildcard is refused', () => {
+  assert.deepEqual(shown('cd sub & del %CD%\\a.txt'), ['C:\\workspace\\proj\\a.txt']);
+  assert.match(denied('del D:*.log') ?? '', /a path relative to another drive's folder \(D:\)/);
+});
