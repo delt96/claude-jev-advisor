@@ -52,9 +52,15 @@ test('a deletion inside a block, a script block or a subexpression is found', { 
 test('-WhatIf, other providers, missing files and plain text are left alone', { skip }, async () => {
   assert.deepEqual(await read('Remove-Item x.txt -WhatIf'), { deny: null, targets: [], failed: [], shells: [] });
   assert.deepEqual(await shown('Remove-Item x.txt -WhatIf:$false'), ['C:\\workspace\\proj\\x.txt']);
-  assert.deepEqual(await shown('Remove-Item Env:FOO, HKCU:\\Software\\X, Registry::HKEY_CURRENT_USER\\X'), []);
-  assert.deepEqual(await shown('Write-Host "Remove-Item x"'), []);
-  assert.deepEqual(await shown('Remove-Item gone.txt', { exists: () => false }), []);
+  const none = { deny: null, targets: [], failed: [], shells: [] };
+  assert.deepEqual(await read('Remove-Item Env:FOO, HKCU:\\Software\\X, Registry::HKEY_CURRENT_USER\\X'), none);
+  assert.deepEqual(await read('Write-Host "Remove-Item x"'), none);
+  assert.deepEqual(await read('Remove-Item gone.txt', { exists: () => false }), none);
+});
+
+test('-WhatIf with a value other than the constant true still deletes', { skip }, async () => {
+  assert.deepEqual(await shown('$x = $false; Remove-Item a.txt -WhatIf:$x'), ['C:\\workspace\\proj\\a.txt']);
+  assert.deepEqual(await shown('Remove-Item a.txt -WhatIf:(0)'), ['C:\\workspace\\proj\\a.txt']);
 });
 
 test('known variables and plain assignments are read, other variables and expressions are refused', { skip }, async () => {
@@ -123,8 +129,77 @@ test('a parse error, a binding error or a failed run asks with the start of the 
   assert.deepEqual((await read('Remove-Item x', { run: fake('not json') })).failed, ['Remove-Item x']);
   assert.deepEqual((await read('Remove-Item x', { run: fake('{"items":[]}') })).failed, ['Remove-Item x']);
   assert.deepEqual((await read('Remove-Item x', { run: async () => { throw new Error('boom'); } })).failed, ['Remove-Item x']);
-  const bindError = fake('{"errors":false,"items":{"kind":"delete","name":"remove-item","path":null,"literalPath":null,"whatIf":false,"bindError":true,"inPipeline":false}}');
-  assert.deepEqual(await read('Remove-Item -LP x.txt', { run: bindError }), { deny: null, targets: [], failed: ['Remove-Item -LP x.txt'], shells: [] });
+  const bindError = fake('{"errors":false,"anyVariable":false,"unstable":[],"items":[{"kind":"delete","path":null,"literalPath":null,"literal":false,"dotnet":false,"whatIf":false,"bindError":true,"inPipeline":false},{"kind":"delete","path":null,"literalPath":null,"literal":false,"dotnet":false,"whatIf":false,"bindError":true,"inPipeline":false}]}');
+  assert.deepEqual(await read('Remove-Item -LP x.txt; ri -LP y.txt', { run: bindError }), { deny: null, targets: [], failed: ['Remove-Item -LP x.txt; ri -LP y.txt'], shells: [] });
+});
+
+test('an answer of an unexpected shape, or a reading error, asks', async () => {
+  const fake = (stdout: string): PowerShellRunner => async () => stdout;
+  const wrap = (items: string) => `{"errors":false,"anyVariable":false,"unstable":[],"items":${items}}`;
+  for (const stdout of [
+    wrap('[null]'),
+    wrap('[{"kind":"delete","path":"a.txt","literalPath":null,"literal":false,"dotnet":false,"whatIf":false,"bindError":false,"inPipeline":false}]'),
+    wrap('[{"kind":"delete","path":{"const":5},"literalPath":null,"literal":false,"dotnet":false,"whatIf":false,"bindError":false,"inPipeline":false}]'),
+    wrap('[{"kind":"surprise"}]'),
+    '{"errors":false,"anyVariable":false,"unstable":[]}',
+    '{"errors":false,"items":[]}',
+    'null',
+  ]) {
+    assert.deepEqual((await read('Remove-Item x', { run: fake(stdout) })).failed, ['Remove-Item x'], stdout);
+  }
+});
+
+test('a variable written any other way than one plain top-level = is unknown everywhere', { skip }, async () => {
+  const sources = [
+    '$p = "$env:TEMP\\x"; $script:p = "C:\\data"; Remove-Item $p',
+    '[string]$d = "C:\\data"; Remove-Item $d',
+    '$d, $e = "C:\\a", "C:\\b"; Remove-Item $d',
+    'Set-Variable d "C:\\data"; Remove-Item $d',
+    '$d = "$env:TEMP\\x"; foreach ($i in 1) { Remove-Item $d; $d = "C:\\data" }',
+    '$d = "$env:TEMP\\x"; function f { Remove-Item $d }; $d = "C:\\data"; f',
+    'for ($i = 1; $i -le 3; $i++) { Remove-Item "C:\\data\\log$i.txt" }',
+    '$p = "C:\\data"; $p += "\\a.txt"; Remove-Item $p',
+    'Get-Item x -OutVariable d; Remove-Item "C:\\data\\$d"',
+  ];
+  const results = await Promise.all(sources.map((source) => denied(source)));
+  sources.forEach((source, i) => assert.match(results[i], /a variable that cannot be worked out/, source));
+});
+
+test('cd.. and cd\\ move, and a Set-Location target with a wildcard or another provider makes the folder unknown', { skip }, async () => {
+  assert.deepEqual(await shown('cd..; Remove-Item a.txt'), ['C:\\workspace\\a.txt']);
+  assert.deepEqual(await shown('cd\\; Remove-Item a.txt'), ['C:\\a.txt']);
+  assert.match(await denied('Set-Location sr*; Remove-Item a.txt'), /a path relative to a folder that cannot be worked out/);
+  assert.match(await denied('Set-Location HKCU:\\Software; Remove-Item a.txt'), /a path relative to a folder that cannot be worked out/);
+  assert.deepEqual(await shown('Set-Location FileSystem::C:\\data; Remove-Item a.txt'), ['C:\\data\\a.txt']);
+  assert.deepEqual(await shown('Set-Location -LiteralPath "a[1]"; Remove-Item x.txt'), ['C:\\workspace\\proj\\a[1]\\x.txt']);
+});
+
+test('pipeline input feeding a shell is refused', { skip }, async () => {
+  assert.match(await denied('"rm -rf /c/data" | bash'), /pipeline input feeding a shell/);
+  assert.match(await denied('\'Remove-Item C:\\data\' | powershell -Command -'), /pipeline input feeding a shell/);
+});
+
+test('variable names PowerShell could read differently are not guessed', { skip }, async () => {
+  assert.match(await denied('$폴더 = "C:\\data"; Remove-Item "$폴더\\a.txt"'), /a variable that cannot be worked out/);
+  assert.match(await denied('Remove-Item "$HOME\\a`$HOME"'), /an expression that cannot be worked out/);
+  assert.deepEqual((await read('cmd /c "rmdir /s /q `"$env:TEMP\\x`""')).shells[0].args, ['/c', `rmdir /s /q "${TMP}\\x"`]);
+});
+
+test('a command PowerShell runs by a name it only learns while running asks when the command deletes', { skip }, async () => {
+  const sources = [
+    '$c = "Remove-Item"; & $c C:\\data\\a.txt',
+    'Invoke-Expression \'Remove-Item C:\\data\\a.txt\'',
+    'Start-Process pwsh -ArgumentList \'-c Remove-Item C:\\data\\a.txt\'',
+    'Set-Alias zz Remove-Item; zz C:\\data\\a.txt',
+  ];
+  const results = await Promise.all(sources.map((source) => read(source)));
+  sources.forEach((source, i) => assert.deepEqual(results[i].failed, [source], source));
+  assert.deepEqual(await read('Start-Process notepad; Remove-Item C:\\data\\a.txt'), { deny: null, targets: [{ shown: 'C:\\data\\a.txt', path: 'C:\\data\\a.txt' }], failed: [], shells: [] });
+  assert.deepEqual(await shown('using namespace System.IO; [File]::Delete("C:\\data\\a.txt")'), ['C:\\data\\a.txt']);
+});
+
+test('a relative .NET Delete path is read in the folder the command started in', { skip }, async () => {
+  assert.deepEqual(await shown('Set-Location sub; [IO.File]::Delete("a.txt")'), ['C:\\workspace\\proj\\a.txt']);
 });
 
 test('the real runner gives up after its time limit', { skip }, async () => {
