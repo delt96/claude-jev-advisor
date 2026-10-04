@@ -18,7 +18,7 @@ const shown = async (source: string, opts?: Options) => (await read(source, opts
 const denied = async (source: string, opts?: Options) => (await read(source, opts)).deny ?? '';
 
 test('the words that start the parser', () => {
-  for (const source of ['Remove-Item x', 'rm x', 'ri x', 'del x', 'erase x', 'rd x', 'rmdir x', '[IO.File]::Delete("x")', 'cmd /c dir', 'pwsh.exe -c x', 'bash -c ls']) {
+  for (const source of ['Remove-Item x', 'rm x', 'ri x', 'del x', 'erase x', 'rd x', 'rmdir x', '[IO.File]::Delete("x")', '(Get-Item x).Delete()', 'Get-ChildItem | % Delete', 'cmd /c dir', 'pwsh.exe -c x', 'bash -c ls']) {
     assert.match(source, POWERSHELL_WORDS, source);
   }
   for (const source of ['Get-ChildItem', 'Push-Location x', 'Remove-ItemProperty -Path HKCU:\\X -Name y', 'git status', 'npm run build']) {
@@ -41,12 +41,13 @@ test('aliases, shortened parameters, positional paths and lists name what is del
 });
 
 test('a deletion inside a block, a script block or a subexpression is found', { skip }, async () => {
-  assert.deepEqual(await shown('if ($ok) { Remove-Item a.txt }; & { ri b.txt }; $r = $(Remove-Item c.txt); foreach ($i in 1) { del d.txt }'), [
-    'C:\\workspace\\proj\\a.txt',
-    'C:\\workspace\\proj\\b.txt',
-    'C:\\workspace\\proj\\c.txt',
-    'C:\\workspace\\proj\\d.txt',
-  ]);
+  const at = (name: string) => ({ shown: `C:\\workspace\\proj\\${name}`, path: `C:\\workspace\\proj\\${name}` });
+  assert.deepEqual(await read('if ($ok) { Remove-Item a.txt }; & { ri b.txt }; $r = $(Remove-Item c.txt); foreach ($i in 1) { del d.txt }'), {
+    deny: null,
+    targets: [at('a.txt'), at('b.txt'), at('c.txt'), at('d.txt')],
+    failed: [],
+    shells: [],
+  });
 });
 
 test('-WhatIf, other providers, missing files and plain text are left alone', { skip }, async () => {
@@ -129,7 +130,7 @@ test('a parse error, a binding error or a failed run asks with the start of the 
   assert.deepEqual((await read('Remove-Item x', { run: fake('not json') })).failed, ['Remove-Item x']);
   assert.deepEqual((await read('Remove-Item x', { run: fake('{"items":[]}') })).failed, ['Remove-Item x']);
   assert.deepEqual((await read('Remove-Item x', { run: async () => { throw new Error('boom'); } })).failed, ['Remove-Item x']);
-  const bindError = fake('{"errors":false,"anyVariable":false,"unstable":[],"items":[{"kind":"delete","path":null,"literalPath":null,"literal":false,"dotnet":false,"whatIf":false,"bindError":true,"inPipeline":false},{"kind":"delete","path":null,"literalPath":null,"literal":false,"dotnet":false,"whatIf":false,"bindError":true,"inPipeline":false}]}');
+  const bindError = fake('{"errors":false,"anyVariable":false,"unstable":[],"items":[{"kind":"delete","path":null,"literalPath":null,"literal":false,"dotnet":false,"whatIf":false,"bindError":true,"inPipeline":false,"ordered":true},{"kind":"delete","path":{"const":"z.txt"},"literalPath":null,"literal":false,"dotnet":false,"whatIf":false,"bindError":true,"inPipeline":false,"ordered":true}]}');
   assert.deepEqual(await read('Remove-Item -LP x.txt; ri -LP y.txt', { run: bindError }), { deny: null, targets: [], failed: ['Remove-Item -LP x.txt; ri -LP y.txt'], shells: [] });
 });
 
@@ -140,8 +141,13 @@ test('an answer of an unexpected shape, or a reading error, asks', async () => {
     wrap('[null]'),
     wrap('[{"kind":"delete","path":"a.txt","literalPath":null,"literal":false,"dotnet":false,"whatIf":false,"bindError":false,"inPipeline":false}]'),
     wrap('[{"kind":"delete","path":{"const":5},"literalPath":null,"literal":false,"dotnet":false,"whatIf":false,"bindError":false,"inPipeline":false}]'),
+    wrap('[{"kind":"delete","path":{"expand":"$d\\\\x"},"literalPath":null,"literal":false,"dotnet":false,"whatIf":false,"bindError":false,"inPipeline":false,"ordered":true}]'),
+    wrap('[{"kind":"delete","path":{"const":"a.txt"},"literalPath":null,"literal":false,"dotnet":false,"whatIf":false,"bindError":false,"inPipeline":false}]'),
     wrap('[{"kind":"surprise"}]'),
+    wrap('null'),
     '{"errors":false,"anyVariable":false,"unstable":[]}',
+    '{"errors":false,"anyVariable":false,"items":[]}',
+    '{"errors":false,"anyVariable":false,"unstable":"d","items":[]}',
     '{"errors":false,"items":[]}',
     'null',
   ]) {
@@ -165,6 +171,24 @@ test('a variable written any other way than one plain top-level = is unknown eve
   sources.forEach((source, i) => assert.match(results[i], /a variable that cannot be worked out/, source));
 });
 
+test('a variable whose name is handed to a command or a variable method as text, or declared as a parameter, is unknown', { skip }, async () => {
+  assert.deepEqual(await shown('$png = "C:\\data\\a.png"; $ch.Chart.Export($png, "PNG"); Remove-Item $png'), ['C:\\data\\a.png']);
+  const sources = [
+    '$d = "$env:TEMP\\x"; Get-Item C:\\data -OutVar d | Out-Null; Remove-Item $d -Recurse',
+    '$d = "$env:TEMP\\x"; Get-Item C:\\nope -ErrorVar d; Remove-Item $d -Recurse',
+    '$d = "$env:TEMP\\x"; function f($d) { Remove-Item $d -Recurse }; f C:\\data',
+    '$d = "$env:TEMP\\x"; Get-Item C:\\data | Tee-Object -Variable d | Out-Null; Remove-Item $d -Recurse',
+    '$d = "$env:TEMP\\x"; iex \'$d = "C:\\data"\'; Remove-Item $d -Recurse',
+    '$d = "$env:TEMP\\x"; data d { "C:\\data" }; Remove-Item $d -Recurse',
+    '$d = "$env:TEMP\\x"; Set-Item variable:d C:\\data; Remove-Item $d -Recurse',
+    '$d = "$env:TEMP\\x"; (Get-Variable d).Value = "C:\\data"; Remove-Item $d -Recurse',
+    '[Environment]::SetEnvironmentVariable("TEMP", "C:\\data"); Remove-Item "$env:TEMP\\x" -Recurse',
+    '$PWD = "C:\\data"; Remove-Item "$PWD\\x" -Recurse',
+  ];
+  const results = await Promise.all(sources.map((source) => denied(source)));
+  sources.forEach((source, i) => assert.match(results[i], /a variable that cannot be worked out/, source));
+});
+
 test('cd.. and cd\\ move, and a Set-Location target with a wildcard or another provider makes the folder unknown', { skip }, async () => {
   assert.deepEqual(await shown('cd..; Remove-Item a.txt'), ['C:\\workspace\\a.txt']);
   assert.deepEqual(await shown('cd\\; Remove-Item a.txt'), ['C:\\a.txt']);
@@ -179,8 +203,10 @@ test('pipeline input feeding a shell is refused', { skip }, async () => {
   assert.match(await denied('\'Remove-Item C:\\data\' | powershell -Command -'), /pipeline input feeding a shell/);
 });
 
-test('variable names PowerShell could read differently are not guessed', { skip }, async () => {
-  assert.match(await denied('$폴더 = "C:\\data"; Remove-Item "$폴더\\a.txt"'), /a variable that cannot be worked out/);
+test('PowerShell, not a pattern, decides where a variable name in a string ends', { skip }, async () => {
+  assert.deepEqual(await shown('$폴더 = "C:\\data"; Remove-Item "$폴더\\a.txt"'), ['C:\\data\\a.txt']);
+  assert.match(await denied('Remove-Item "$env:TEMP한\\..\\Temp\\x" -Recurse'), /a variable that cannot be worked out/);
+  assert.match(await denied('Remove-Item -LiteralPath "$PWD?\\..\\proj\\build" -Recurse'), /a variable that cannot be worked out/);
   assert.match(await denied('Remove-Item "$HOME\\a`$HOME"'), /an expression that cannot be worked out/);
   assert.deepEqual((await read('cmd /c "rmdir /s /q `"$env:TEMP\\x`""')).shells[0].args, ['/c', `rmdir /s /q "${TMP}\\x"`]);
 });
@@ -198,8 +224,50 @@ test('a command PowerShell runs by a name it only learns while running asks when
   assert.deepEqual(await shown('using namespace System.IO; [File]::Delete("C:\\data\\a.txt")'), ['C:\\data\\a.txt']);
 });
 
+test('code handed over in a variable or a pipe, run by a method, or a Delete method the reader cannot follow asks', { skip }, async () => {
+  const sources = [
+    '$s = \'Remove-Item C:\\data\\a.txt\'; Invoke-Expression $s',
+    '\'Remove-Item C:\\data -Recurse\' | iex',
+    '$n = \'Remove-Item\'; Set-Alias zz $n; zz C:\\data\\a.txt',
+    '$a = \'-c Remove-Item C:\\data\'; Start-Process pwsh -ArgumentList $a',
+    '$sb = [scriptblock]::Create(\'Remove-Item C:\\data\'); Invoke-Command $sb',
+    '[scriptblock]::Create(\'Remove-Item C:\\data\').Invoke()',
+    '$ExecutionContext.InvokeCommand.InvokeScript(\'Remove-Item C:\\data\')',
+    '$t = [IO.File]; $t::Delete(\'C:\\data\\a.txt\')',
+    '[Diagnostics.Process]::Start(\'cmd\', \'/c rmdir /s /q C:\\data\')',
+    '(Get-Item C:\\data).Delete($true)',
+    'Get-ChildItem C:\\data | ForEach-Object Delete',
+    'Get-ChildItem C:\\data | ForEach-Object { $_.Delete() }',
+    '$f = Copy-Item a.txt C:\\data\\b.txt -PassThru; $f.Delete()',
+  ];
+  const results = await Promise.all(sources.map((source) => read(source)));
+  sources.forEach((source, i) => assert.deepEqual(results[i], { deny: null, targets: [], failed: [source], shells: [] }, source));
+  const plain = [
+    '$p = "C:\\data\\deck.pptx"; Start-Process $p',
+    '$ch = $ws.ChartObjects().Add(0, 0, 10, 10); $ch.Delete()',
+    '[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)',
+    '$sw = New-Object Diagnostics.Stopwatch; $sw.Start()',
+  ].map((source) => `${source}; Remove-Item C:\\data\\a.txt`);
+  const plainResults = await Promise.all(plain.map((source) => read(source)));
+  plain.forEach((source, i) => assert.deepEqual(plainResults[i], { deny: null, targets: [{ shown: 'C:\\data\\a.txt', path: 'C:\\data\\a.txt' }], failed: [], shells: [] }, source));
+});
+
 test('a relative .NET Delete path is read in the folder the command started in', { skip }, async () => {
   assert.deepEqual(await shown('Set-Location sub; [IO.File]::Delete("a.txt")'), ['C:\\workspace\\proj\\a.txt']);
+  assert.match(await denied('[Environment]::CurrentDirectory = "C:\\data"; [IO.File]::Delete("a.txt")'), /a path relative to a folder that cannot be worked out/);
+});
+
+test('a loop, a function or a script block that may run after a folder move reads relative names in an unknown folder', { skip }, async () => {
+  assert.match(await denied('foreach ($i in 1, 2) { Remove-Item a.txt; Set-Location C:\\data }'), /a path relative to a folder that cannot be worked out/);
+  assert.match(await denied('function f { Remove-Item a.txt }; Set-Location C:\\data; f'), /a path relative to a folder that cannot be worked out/);
+  assert.equal((await read('foreach ($i in 1, 2) { bash -c "rm a"; Set-Location C:\\data }')).shells[0].cwd, null);
+  assert.deepEqual(await shown('Set-Location sub; if (Test-Path a.txt) { Remove-Item a.txt }; foreach ($i in 1) { Remove-Item C:\\abs\\b.txt }'), ['C:\\workspace\\proj\\sub\\a.txt', 'C:\\abs\\b.txt']);
+});
+
+test('paths on providers other than the file system are left alone, and a drive the reader does not know is refused', { skip }, async () => {
+  assert.match(await denied('Set-Location Microsoft.PowerShell.Core\\Registry::HKCU\\Software; Remove-Item a.txt'), /a path relative to a folder that cannot be worked out/);
+  assert.deepEqual(await read('Remove-Item Microsoft.PowerShell.Core\\Registry::HKEY_CURRENT_USER\\X, Function:f, Alias:zz, Variable:v, Cert:\\x, WSMan:\\x, HKLM:\\x'), { deny: null, targets: [], failed: [], shells: [] });
+  assert.match(await denied('New-PSDrive -Name Data -PSProvider FileSystem -Root C:\\data; Remove-Item Data:\\x -Recurse'), /a path on a PowerShell drive that cannot be worked out \(Data:\\x\)/);
 });
 
 test('the real runner gives up after its time limit', { skip }, async () => {
