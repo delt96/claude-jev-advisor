@@ -43,8 +43,8 @@ export function splitPattern(value: string, wildcard: RegExp): { dir: string; pa
   return { dir: value.slice(0, Math.max(cut, 0)) || '.', pattern: value.slice(cut + 1) };
 }
 
-// A name right under a root keeps the root as its folder (`C:\*.log`, `/*.log`), and `D:*.log` keeps its drive so
-// the drive-relative path is refused instead of being read in the current folder.
+// A name right under a root keeps the root as its folder (`C:\*.log`, `/*.log`), and `D:*.log` keeps its drive, which
+// resolveWindowsPath refuses as drive-relative instead of reading it in the current folder.
 export function splitWindowsPattern(value: string, wildcard: RegExp): { dir: string; pattern: string } | null {
   const drive = /^([A-Za-z]:)([^\\/]*)$/.exec(value);
   if (drive) return { dir: drive[1], pattern: drive[2] };
