@@ -41,6 +41,11 @@ test('an rm hook registered for Bash only says how to cover PowerShell', () => {
   fs.writeFileSync(settingsPath(home), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command }] }] } }));
   const warning = '  Bash only: run "claude-jev-advisor install rm" to cover PowerShell';
   assert.ok(statusLines(home).includes(warning));
+  for (const matcher of [undefined, '', '*', '.*', 'Bash|Power.*']) {
+    fs.writeFileSync(settingsPath(home), JSON.stringify({ hooks: { PreToolUse: [{ matcher, hooks: [{ type: 'command', command }] }] } }));
+    assert.equal(statusLines(home).includes(warning), false, String(matcher));
+  }
+  fs.writeFileSync(settingsPath(home), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command }] }] } }));
   install({ home, features: ['rm'], distDir, platform: 'win32', now: NOW });
   assert.equal(statusLines(home).includes(warning), false);
 });

@@ -21,8 +21,10 @@ export type RmHookDeps = {
 };
 
 export const MAX_JEV_TARGETS = 5;
-// Claude Code lets the Bash call run when a PreToolUse hook passes its 15-second limit, which would drop the ask:
-// the Jev path gives up well before that and leaves the ask.
+// Claude Code lets the tool call run when a PreToolUse hook passes its 15-second limit, which would drop the ask: no
+// PowerShell read starts after READ_BUDGET_MS (one already running ends within its 3-second limit) and leaves the
+// command unread, and the Jev path gives up well before the limit and leaves the ask.
+export const READ_BUDGET_MS = 9000;
 export const FACTS_BUDGET_MS = 5000;
 export const JEV_PATH_BUDGET_MS = 12000;
 const MIN_JEV_MS = 1000;
@@ -81,7 +83,9 @@ export async function runRmHook(raw: string, deps: RmHookDeps): Promise<string |
   const tmpdirs = [...new Set([deps.tmpdir, deps.env.TEMP, deps.env.TMP].filter((t): t is string => Boolean(t)).map((t) => path.win32.resolve(t)))];
   const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : deps.cwd;
   const ctx = { cwd, home: deps.home, tmpdirs, env: deps.env, probe: deps.probe };
-  const result = await decideTool(tool, command, ctx, deps.powershell ?? realPowerShell(deps.env));
+  const powershell = deps.powershell ?? realPowerShell(deps.env);
+  const read: PowerShellRunner = (source) => (now().getTime() - started >= READ_BUDGET_MS ? Promise.resolve(null) : powershell(source));
+  const result = await decideTool(tool, command, ctx, read);
   if (!result) return null;
   if (result.decision !== 'ask' || !result.targets || !config.rm.jev) return hookOutput(result);
   const key = readJevKey(deps.env, config.keyFile);

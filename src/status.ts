@@ -61,6 +61,16 @@ function rmJevLine(config: Config, env: Record<string, string | undefined>): str
   return `  jev: on, lifts the ask from ${config.rm.throwawayYes}${key}`;
 }
 
+// Claude Code reads a missing, empty or "*" matcher as every tool, and any other matcher as a pattern for the name.
+function coversPowerShell(matcher: string | undefined): boolean {
+  if (!matcher || matcher === '*') return true;
+  try {
+    return new RegExp(`^(?:${matcher})$`).test('PowerShell');
+  } catch {
+    return false;
+  }
+}
+
 export function statusLines(home: string, env: Record<string, string | undefined> = process.env): string[] {
   const lines = [`settings: ${settingsPath(home)}`, `config:   ${configPath(home)}`];
   let settings: Settings;
@@ -87,7 +97,7 @@ export function statusLines(home: string, env: Record<string, string | undefined
     if (feature === 'context') lines.push(...contextLines(home, settings, config, env));
     if (feature === 'rm') {
       lines.push(rmJevLine(config, env));
-      if (!commands.some((c) => (c.matcher ?? '').split('|').includes('PowerShell'))) {
+      if (!commands.some((c) => coversPowerShell(c.matcher))) {
         lines.push('  Bash only: run "claude-jev-advisor install rm" to cover PowerShell');
       }
     }

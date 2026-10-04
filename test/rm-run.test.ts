@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runRmHook, type RmHookDeps } from '../src/rm/run.js';
+import { PS_PARSE_TIMEOUT_MS } from '../src/rm/powershell.js';
+import { READ_BUDGET_MS, runRmHook, type RmHookDeps } from '../src/rm/run.js';
 import { DEFAULT_CONFIG, writeConfig } from '../src/config.js';
 
 const REPO = path.resolve(import.meta.dirname, '..');
@@ -51,6 +52,23 @@ test('a PowerShell command that cannot be read asks instead of passing', async (
   const out = JSON.parse((await runRmHook(JSON.stringify({ tool_name: 'PowerShell', tool_input: { command: 'Remove-Item x' } }), { ...deps(tempHome()), powershell: async () => null }))!);
   assert.equal(out.hookSpecificOutput.permissionDecision, 'ask');
   assert.equal(out.hookSpecificOutput.permissionDecisionReason, '삭제 명령을 분석하지 못함: Remove-Item x');
+  assert.equal(await runRmHook(JSON.stringify({ tool_name: 'PowerShell', tool_input: {} }), deps(tempHome())), null);
+});
+
+test('no PowerShell read starts once the read budget is spent, so slow reads ask before the hook limit', async () => {
+  let clock = 0;
+  let runs = 0;
+  const powershell = async () => {
+    runs++;
+    clock += PS_PARSE_TIMEOUT_MS;
+    return null;
+  };
+  const command = Array.from({ length: 6 }, (_, i) => `powershell -c "Remove-Item C:/data/a${i}.txt"`).join('; ');
+  const out = JSON.parse((await runRmHook(bash(command), { ...deps(tempHome()), powershell, now: () => new Date(clock) }))!);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'ask');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /^삭제 명령을 분석하지 못함: /);
+  assert.equal(runs, Math.ceil(READ_BUDGET_MS / PS_PARSE_TIMEOUT_MS));
+  assert.ok(clock <= READ_BUDGET_MS + PS_PARSE_TIMEOUT_MS);
 });
 
 test('switched off, nothing is checked', async () => {
