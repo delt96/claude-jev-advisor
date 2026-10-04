@@ -7,6 +7,8 @@ export const MAX_NESTING = 3;
 // The shortest start PowerShell takes for each switch that takes a value; -co is -Command, -config the configuration.
 const POWERSHELL_VALUE_PARAMS: [string, number][] = [['executionpolicy', 2], ['windowstyle', 2], ['outputformat', 2], ['inputformat', 2], ['workingdirectory', 2], ['configurationname', 6], ['settingsfile', 2], ['version', 2], ['psconsolefile', 2], ['custompipename', 2]];
 const POWERSHELL_VALUE_ALIASES = ['ep', 'ex', 'w', 'o', 'of', 'if', 'wd', 'v'];
+// cmd runs what follows /c or /k even when it is glued to the command or to other switches (`/cdel x`, `/d/c`).
+const CMD_RUN = /^\/{1,2}(?:[a-z]+\/)*[ck](.*)$/is;
 
 export type Nested = { shell: Shell; script: string | null; moved?: boolean } | null;
 
@@ -46,6 +48,7 @@ function powerShellScript(name: string, args: (string | null)[]): Nested {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === null) return found(null);
+    if (a === '-') return null;
     if (!isParam(a)) {
       // powershell.exe reads its first plain argument as a command, pwsh reads it as a script file.
       if (name === 'pwsh') return null;
@@ -76,12 +79,43 @@ export function nestedScript({ name, args }: ShellCall): Nested {
   if (name === 'sh' || name === 'bash') return bashScript(args);
   if (name === 'powershell' || name === 'pwsh') return powerShellScript(name, args);
   if (name === 'cmd') {
-    const at = args.findIndex((a) => a !== null && /^\/{1,2}[ck]$/i.test(a));
+    const at = args.findIndex((a) => a !== null && CMD_RUN.test(a));
     if (at === -1) return null;
-    const rest = args.slice(at + 1);
+    const glued = CMD_RUN.exec(args[at] as string)![1];
+    const rest = [...(glued ? [glued] : []), ...args.slice(at + 1)];
     return rest.includes(null) ? { shell: 'cmd', script: null } : { shell: 'cmd', script: cmdLine(rest as string[]) };
   }
   return null;
+}
+
+// A shell given neither a script nor a script file runs what reaches its stdin: a pipe, a heredoc, a here-string, or
+// the rest of the script that started it.
+export function readsStdin({ name, args }: ShellCall): boolean {
+  if (args.includes(null)) return false;
+  const given = args as string[];
+  if (name === 'sh' || name === 'bash') {
+    for (let i = 0; i < given.length; i++) {
+      const a = given[i];
+      if (a === '--') return i + 1 === given.length;
+      if (!/^[-+]/.test(a)) return false;
+      if (/^-[A-Za-z]*s[A-Za-z]*$/.test(a)) return true;
+      if (/^[-+][oO]$/.test(a) || a === '--rcfile' || a === '--init-file') i++;
+    }
+    return true;
+  }
+  if (name === 'powershell' || name === 'pwsh') {
+    for (let i = 0; i < given.length; i++) {
+      const a = given[i];
+      if (a === '-') return true;
+      if (!isParam(a)) return false;
+      const p = paramName(a);
+      if (p === 'cwa' || startsWord(p, 'command', 1) || startsWord(p, 'commandwithargs', 8)) return given[i + 1] === undefined || given[i + 1] === '-';
+      if (p === 'f' || startsWord(p, 'file', 2) || p === 'e' || p === 'ec' || startsWord(p, 'encodedcommand', 2)) return false;
+      if (POWERSHELL_VALUE_ALIASES.includes(p) || POWERSHELL_VALUE_PARAMS.some(([full, min]) => startsWord(p, full, min))) i++;
+    }
+    return true;
+  }
+  return name === 'cmd' && !given.some((a) => CMD_RUN.test(a));
 }
 
 function readShell(shell: Shell, script: string, ctx: ReadCtx, run: PowerShellRunner): Promise<ReadResult> | ReadResult {
@@ -97,9 +131,8 @@ async function readNested(shell: Shell, script: string, ctx: ReadCtx, run: Power
   for (const call of result.shells) {
     const nested = nestedScript(call);
     if (nested === null) {
-      // Without a script argument the shell runs what reaches its stdin (a pipe, a heredoc, a here-string), which this
-      // reader never sees; when the command shows a delete, that is where it could go.
-      if (call.piped && DELETE_WORDS.test(script)) return { ...merged, deny: denyReason(shell, `a shell reading its script from stdin (${call.raw})`) };
+      // This reader never sees what reaches the shell's stdin; when the command shows a delete, that is where it could go.
+      if ((call.piped || readsStdin(call)) && DELETE_WORDS.test(script)) return { ...merged, deny: denyReason(shell, `a shell reading its script from stdin (${call.raw})`) };
       continue;
     }
     if (nested.script === null || depth >= MAX_NESTING) {

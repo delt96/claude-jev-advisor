@@ -19,7 +19,7 @@ Not affiliated with Anthropic or TypeSafe.
 - Node.js 18 or later
 - Claude Code (the bottom-row display uses Claude Code mods, an early-access feature that may change between releases)
 - A TypeSafe API key for the `context` helper and for the Jev check of the `rm` helper, in `TYPESAFE_API_KEY` or in a key file (`--key-file`). Without a key, `rm` asks about every real file.
-- Windows for the `rm` helper. On other systems `install` skips it and says why. It reads PowerShell commands with Windows PowerShell, which comes with Windows, or with PowerShell 7 when `pwsh` is on `PATH`, the same one Claude Code uses.
+- Windows for the `rm` helper. On other systems `install` skips it and says why. It reads PowerShell commands with Windows PowerShell, which comes with Windows, or with PowerShell 7 when `pwsh` is on `PATH`, the same one Claude Code uses. It was checked with Windows PowerShell 5.1; PowerShell 7 was not tested.
 
 ## Install
 
@@ -35,7 +35,7 @@ claude-jev-advisor install
 
 When the context helper is installed and no key is found, `install` asks for your TypeSafe API key. What you type is hidden. It checks the key with one small Jev call and saves it to `~/.claude/claude-jev-advisor/jev-key.env`. Press Enter to skip; `claude-jev-advisor key` asks again later. Instead of typing it, you can set `TYPESAFE_API_KEY`, or pass `--key-file <path>` to a file holding a line `TYPESAFE_API_KEY=...` (then only that path is saved). The key is never printed or logged. On Windows that file is protected by your user folder's permissions only.
 
-Before it changes `~/.claude/settings.json`, `install` copies it to `~/.claude/backups/settings.json.<YYYY-MM-DD-HHmmss>-before-claude-jev-advisor`. If a backup from the same second already exists, it adds `-2`, `-3` and so on instead of overwriting it. It then adds or replaces only this package's entries. Running it again changes nothing.
+Before it changes `~/.claude/settings.json`, `install` copies it to `~/.claude/backups/settings.json.<YYYY-MM-DD-HHmmss>-before-claude-jev-advisor`. If a backup from the same second already exists, it adds `-2`, `-3` and so on instead of overwriting it. It then adds or replaces only this package's entries. Running it again with the same version changes nothing.
 
 After upgrading from 0.2 or earlier, run `claude-jev-advisor install rm` again so that the rm hook also covers the PowerShell tool. Until you do, `status` shows `Bash only`.
 
@@ -98,18 +98,18 @@ It runs before every Bash and PowerShell tool call (`PreToolUse`, matcher `Bash|
 | A path with a `.superpowers` folder in it | No decision |
 | A path that does not exist | No decision |
 | A git-ignored path inside a build folder (`target`, `build`, `dist`, `out`, `node_modules`, `coverage`, `__pycache__`, `.pytest_cache`, `.gradle`, `.next`, `.nuxt`, `.turbo`, `.cache`, `bin`, `obj`) | No decision |
-| A PowerShell path on a drive that is not a file system (`Env:`, `HKCU:`, `HKLM:`, `Cert:`, `Registry::`) | No decision |
+| A PowerShell path on a drive that is not a file system (`Env:`, `Alias:`, `Function:`, `Variable:`, `HKCU:`, `HKLM:`, `Cert:`, `WSMan:`, `Registry::`) | No decision |
 | `Remove-Item … -WhatIf` | No decision |
 | A network path (`\\server\share\…`) | `ask`, without looking the path up |
 | Any other existing file or folder | `ask`, with the reason `실제 파일 삭제: <paths>` ("deleting real files"), unless Jev lifts it (below) |
-| A PowerShell command its parser cannot read (a syntax error, PowerShell not answering within 3 seconds, a nested PowerShell command left when the hook has spent 9 seconds reading, an answer it does not expect), or one that deletes and runs code it cannot follow (`& $name`, `Invoke-Expression`, `Start-Process` or `Set-Alias` with an argument it cannot work out, `[scriptblock]::Create`, `.Invoke()`, a `Delete()` method in a command that gets file objects from `Get-Item`, `Get-ChildItem`, `New-Item` or `-PassThru`) | `ask`, with the reason `삭제 명령을 분석하지 못함: <start of the command>` ("could not read the delete command"). Jev is not asked. |
+| A PowerShell command its parser cannot read (a syntax error, PowerShell not answering within 3 seconds, a nested PowerShell command left when the hook has spent 9 seconds reading, an answer it does not expect), or one that deletes and runs code it cannot follow (`& $name`, `Invoke-Expression`, `Start-Process` or `Set-Alias` with an argument it cannot work out, `[scriptblock]::Create`, `.Invoke()`, a `Delete()` method in a command that gets file objects from `Get-Item`, `Get-ChildItem`, `New-Item` or `-PassThru`), or makes a drive with `New-PSDrive` | `ask`, with the reason `삭제 명령을 분석하지 못함: <start of the command>` ("could not read the delete command"). Jev is not asked. |
 | A target it cannot work out | `deny`, with a hint to rewrite the command using literal paths |
 
 A target cannot be worked out when it uses:
 
 - in Bash, shell variables other than literal assignments in the same command and `TEMP`, `TMP`, `TMPDIR`, `HOME`, `USERPROFILE` and `PWD`; in PowerShell, variables other than one plain top-level assignment in the same command (a variable written any other way, such as `+=`, a loop, a function parameter, `Set-Variable`, `$script:`, `-OutVariable`, or its name handed to a command as text, is unknown), `$env:TEMP`, `$env:TMP`, `$env:TMPDIR`, `$env:HOME`, `$env:USERPROFILE`, `$HOME` and `$PWD` (unless the command assigns it); in `cmd`, variables other than `%TEMP%`, `%TMP%`, `%USERPROFILE%` and `%CD%`
 - command substitution, or in PowerShell any expression such as `(Join-Path …)`, `$(…)` or `@splat`
-- `xargs` feeding `rm` or a shell that deletes, PowerShell pipeline input feeding `Remove-Item` (`Get-ChildItem … | Remove-Item`), or a shell that reads its script from a pipe, a heredoc or a here-string (`… | bash`, `bash <<EOF`) in a command that holds a delete word
+- `xargs` feeding `rm` or a shell that deletes, PowerShell pipeline input feeding `Remove-Item` (`Get-ChildItem … | Remove-Item`), or a shell given no script of its own, which reads one from a pipe, a heredoc or a here-string (`… | bash`, `bash <<EOF`, `powershell -`), in a command that holds a delete word
 - brace expansion
 - a wildcard in a folder name
 - a `cd`, `pushd`, `Set-Location` or `Push-Location` to such a path earlier in the command, a `popd` or `Pop-Location`, or a location change inside a PowerShell block; in PowerShell also a relative path inside a loop, a function or a script block when the command changes location anywhere
@@ -119,7 +119,7 @@ A target cannot be worked out when it uses:
 
 It does not see deletions made any other way:
 
-- in PowerShell, `Remove-ItemProperty`, `Clear-RecycleBin`, an object's `Delete()` in a command that gets no file objects, and code that builds a command's name or text from pieces while it runs (`[char]` codes, joined strings); the reader is not a sandbox
+- in PowerShell, `Remove-ItemProperty`, `Clear-RecycleBin`, an object's `Delete()` in a command that gets no file objects, COM file objects (`Scripting.FileSystemObject`'s `DeleteFile` and `DeleteFolder`), provider methods such as `$ExecutionContext.InvokeProvider.Item.Remove`, and code that builds a command's name or text from pieces while it runs (`[char]` codes, joined strings); the reader is not a sandbox
 - script files: `powershell -File`, `pwsh script.ps1`, `bash script.sh`, a `.bat` file
 - other commands or programs, such as `find -delete`, `git clean`, or Node or Python code that deletes files
 

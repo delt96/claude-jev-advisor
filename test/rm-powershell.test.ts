@@ -203,6 +203,18 @@ test('pipeline input feeding a shell is refused', { skip }, async () => {
   assert.match(await denied('\'Remove-Item C:\\data\' | powershell -Command -'), /pipeline input feeding a shell/);
 });
 
+test('a word that only spells a variable name is no write, a constant member name is no call, and a new drive asks', { skip }, async () => {
+  assert.deepEqual(await shown('$file = "C:\\data\\a.txt"; New-Item -ItemType File $file -Force | Out-Null; Remove-Item $file'), ['C:\\data\\a.txt']);
+  assert.deepEqual(await shown('$build = "C:\\data\\build"; npm run build; Remove-Item $build -Recurse'), ['C:\\data\\build']);
+  assert.deepEqual(await read('mkdir temp -Force; Remove-Item "$env:TEMP\\x" -Recurse'), { deny: null, targets: [], failed: [], shells: [] });
+  assert.deepEqual(await read('Get-ChildItem C:\\x | % Name; Remove-Item C:\\data\\a.txt'), { deny: null, targets: [{ shown: 'C:\\data\\a.txt', path: 'C:\\data\\a.txt' }], failed: [], shells: [] });
+  for (const source of ['$d = "$env:TEMP\\x"; Set-Item variable:/d C:\\data; Remove-Item $d -Recurse', '$d = "$env:TEMP\\x"; Set-Item Variable::d C:\\data; Remove-Item $d -Recurse']) {
+    assert.match(await denied(source), /a variable that cannot be worked out/, source);
+  }
+  const drive = 'New-PSDrive -Name Q -PSProvider FileSystem -Root C:\\Windows; Remove-Item Q:\\win.ini';
+  assert.deepEqual((await read(drive)).failed, [drive]);
+});
+
 test('PowerShell, not a pattern, decides where a variable name in a string ends', { skip }, async () => {
   assert.deepEqual(await shown('$폴더 = "C:\\data"; Remove-Item "$폴더\\a.txt"'), ['C:\\data\\a.txt']);
   assert.match(await denied('Remove-Item "$env:TEMP한\\..\\Temp\\x" -Recurse'), /a variable that cannot be worked out/);

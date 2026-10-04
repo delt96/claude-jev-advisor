@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { denyReason, emptyRead, judgePath, resolveWindowsPath, splitWindowsPattern, type ReadCtx, type ReadResult, type RmTarget } from './targets.js';
+import { DELETE_WORDS, denyReason, emptyRead, judgePath, resolveWindowsPath, splitWindowsPattern, type ReadCtx, type ReadResult, type RmTarget } from './targets.js';
 
 export const PS_PARSE_TIMEOUT_MS = 3000;
 export const POWERSHELL_WORDS = /\b(?:remove-item|ri|rm|del|erase|rd|rmdir|sh|bash|cmd|powershell|pwsh)(?:\.exe)?\b|\bdelete/i;
-const DELETE_WORD = /(?<![\w.-])(?:remove-item|ri|rm|del|erase|rd|rmdir)(?![\w-])|\bdelete/i;
+// PowerShell also calls Delete by a bare member name (`ForEach-Object Delete`).
+const DELETE_WORD = new RegExp(`${DELETE_WORDS.source}|\\bdelete`, 'i');
 const OTHER_DRIVES = new Set(['alias', 'env', 'function', 'variable', 'hklm', 'hkcu', 'cert', 'wsman']);
 const EXCERPT_CHARS = 200;
 const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE'];
@@ -96,7 +97,7 @@ function Bound($command) {
       'Path' { $out.path = Value $result.Value }
       'LiteralPath' { $out.literalPath = Value $result.Value }
       'Name' { $out.name = $result }
-      'MemberName' { $out.member = $true }
+      'MemberName' { $out.member = $result }
       'WhatIf' {
         $v = $result.Value
         if ($null -eq $v) { $out.whatIf = ($result.ConstantValue -eq $true) }
@@ -113,9 +114,17 @@ $pops = @('pop-location', 'popd')
 $shells = @('sh', 'bash', 'cmd', 'powershell', 'pwsh')
 $dynamics = @('invoke-expression', 'iex', 'start-process', 'saps', 'start', 'invoke-command', 'icm', 'start-job', 'sajb', 'start-threadjob', 'set-alias', 'sal', 'new-alias', 'nal', 'add-type')
 $members = @('foreach-object', '%', 'foreach')
+$drives = @('new-psdrive', 'ndr', 'mount')
 $variableCommands = @('set-variable', 'sv', 'new-variable', 'nv', 'remove-variable', 'rv', 'clear-variable', 'clv', 'get-variable', 'gv')
 $variableParameters = @('outvariable', 'errorvariable', 'warningvariable', 'informationvariable', 'pipelinevariable')
 $variableAliases = @('ov', 'ev', 'wv', 'iv', 'pv')
+$nameParameters = @('variable', 'bindingvariable') + $variableParameters
+
+function NamesVariable($element) {
+  if (-not ($element -is [System.Management.Automation.Language.CommandParameterAst])) { return $false }
+  $p = $element.ParameterName.ToLowerInvariant()
+  return $variableAliases -contains $p -or ($p.Length -ge 2 -and @($nameParameters | Where-Object { $_.StartsWith($p) }).Count -gt 0)
+}
 $codeMethods = @('invoke', 'invokereturnasis', 'invokewithcontext', 'invokescript', 'newscriptblock', 'addscript', 'addcommand', 'begininvoke')
 $dotnet = @('system.io.file', 'io.file', 'file', 'system.io.directory', 'io.directory', 'directory')
 $fileCommands = @('get-item', 'gi', 'get-childitem', 'gci', 'ls', 'dir', 'new-item', 'ni')
@@ -136,8 +145,9 @@ $named = New-Object 'System.Collections.Generic.HashSet[string]' ([System.String
 foreach ($s in $root.FindAll({ param($x) $x -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)) {
   foreach ($m in [regex]::Matches($s.Value, '\$\{?(?:\w+:)?([\w?]+)')) { [void]$named.Add($m.Groups[1].Value) }
   $parent = $s.Parent
-  if ($s.Value -match '^(?:variable|env):\\?(.+)$') { [void]$named.Add($Matches[1]) }
-  elseif (($parent -is [System.Management.Automation.Language.CommandAst] -and $parent.CommandElements[0] -ne $s) -or $parent -is [System.Management.Automation.Language.CommandParameterAst] -or ($parent -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $parent.Member -ne $s -and $parent.Member.Value -match 'variable|^set$')) {
+  $at = if ($parent -is [System.Management.Automation.Language.CommandAst]) { $parent.CommandElements.IndexOf($s) } else { -1 }
+  if ($s.Value -match '^(?:[\w.]+\\)?(?:variable|env|environment):{1,2}[\\/]?(.+)$') { [void]$named.Add($Matches[1]) }
+  elseif (($at -gt 0 -and (NamesVariable $parent.CommandElements[$at - 1])) -or (NamesVariable $parent) -or ($parent -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $parent.Member -ne $s -and $parent.Member.Value -match 'variable|^set$|^get$')) {
     [void]$named.Add(($s.Value -replace '^\+', '' -replace '^(?:script|global|local|private):', ''))
   }
 }
@@ -235,7 +245,14 @@ foreach ($a in $found) {
       [void]$items.Add(@{ kind = 'dynamic'; text = $a.Extent.Text; args = $values.ToArray() })
     }
   } elseif ($members -contains $name) {
-    if ((Bound $a).member) { [void]$items.Add(@{ kind = 'dynamic'; text = $null; args = @() }) }
+    $m = (Bound $a).member
+    if ($null -ne $m) {
+      $v = $m.ConstantValue
+      if ($null -eq $v -or ([string]$v) -match '^delete' -or $codeMethods -contains ([string]$v).ToLowerInvariant()) { [void]$items.Add(@{ kind = 'dynamic'; text = $null; args = @() }) }
+    }
+  } elseif ($drives -contains $name) {
+    # A drive made here can carry a one-letter name that reads like a real drive.
+    [void]$items.Add(@{ kind = 'dynamic'; text = $null; args = @() })
   } elseif ($variableCommands -contains $name) {
     $b = Bound $a
     $names = if ($null -ne $b.name) { @($b.name.ConstantValue) } else { @() }

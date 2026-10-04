@@ -105,6 +105,9 @@ test('a delete on a line with if, else, for, call, start or parentheses is refus
     '@(echo a & del b.txt)',
     'echo (hi) & del a.txt',
     '%X% del a.txt',
+    'if,exist x del x',
+    'call;del x.txt',
+    'start/b del y.txt',
   ]) {
     assert.match(denied(line) ?? '', /a delete on a cmd line with if, else, for, call, start, parentheses or a command that cannot be worked out \(.*\); write plain del or rd lines, with names that hold parentheses in double quotes/, JSON.stringify(line));
   }
@@ -138,6 +141,8 @@ test('a switch right after the name, cd.. and cd\\ are read the way cmd reads th
   assert.deepEqual(shown('cd.. & del x.txt'), ['C:\\workspace\\x.txt']);
   assert.deepEqual(shown('cd\\ & del x.txt'), ['C:\\x.txt']);
   assert.deepEqual(shown('del,a.txt'), ['C:\\workspace\\proj\\a.txt']);
+  assert.deepEqual(shown('pushd.. & del x.txt'), ['C:\\workspace\\x.txt']);
+  assert.deepEqual(shown('pushd\\ & del x.txt'), ['C:\\x.txt']);
 });
 
 test('a name with parentheses is read when quoted or escaped, and refused when bare', () => {

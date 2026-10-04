@@ -16,7 +16,9 @@ export type ReadResult = { deny: string | null; targets: RmTarget[]; failed: str
 export type Resolved = { path: string } | { unc: string } | { unresolvable: string };
 
 export const emptyRead = (): ReadResult => ({ deny: null, targets: [], failed: [], shells: [] });
-export const DELETE_WORDS = /\b(?:rm|rmdir|del|erase|rd|ri|remove-item)\b|::\s*delete\b/i;
+// A delete word of any of the three shells, not glued to a dash or a dot (`--rm`, `*.rm`), or a .NET Delete method
+// (`::Delete(`, `.Delete()`, `::DeleteFile(`).
+export const DELETE_WORDS = /(?<![\w.-])(?:rm|rmdir|del|erase|rd|ri|remove-item)(?![\w-])|(?:\.|::)\s*delete\w*/i;
 
 export function isInside(child: string, parent: string): boolean {
   const c = child.toLowerCase();

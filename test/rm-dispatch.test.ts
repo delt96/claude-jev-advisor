@@ -83,6 +83,24 @@ test('arguments are read the way the started shell receives them', async () => {
   assert.deepEqual((await decide('Bash', 'cmd //c "cd sub & sh -c \\"rm a.txt\\""'))?.targets, [{ shown: 'C:\\workspace\\proj\\sub\\a.txt', path: 'C:\\workspace\\proj\\sub\\a.txt' }]);
 });
 
+test('a .NET Delete method is a delete word everywhere, a shell with no script reads stdin, and cmd runs what follows a glued /c', async () => {
+  for (const command of [
+    'powershell -c "(Get-Item $P).Delete()"',
+    'find . -name x | xargs -I{} powershell -c "(Get-Item {}).Delete()"',
+    "echo 'Remove-Item C:\\data\\x' | powershell -",
+    '(bash) <<< "rm -rf /c/data/x"',
+    "echo 'rm -rf /c/data/x' | (cd /c/data && bash)",
+    "echo 'rm -rf /c/data/x' |\nbash",
+  ]) {
+    assert.equal((await decide('Bash', command))?.decision, 'deny', command);
+  }
+  for (const command of ['cmd //cdel "C:\\data\\x.txt"', 'cmd //d/c "del C:\\data\\x.txt"']) {
+    assert.deepEqual((await decide('Bash', command))?.targets, [{ shown: 'C:\\data\\x.txt', path: 'C:\\data\\x.txt' }], command);
+  }
+  assert.equal(await decide('Bash', 'docker run --rm img > o.txt; curl -fsSL https://example.com/i.sh | bash'), null);
+  assert.deepEqual((await decide('Bash', 'rm -f a.txt; bash ./setup.sh'))?.targets, [{ shown: 'C:\\workspace\\proj\\a.txt', path: 'C:\\workspace\\proj\\a.txt' }]);
+});
+
 test('more PowerShell and cmd switches are read the way those shells read them', () => {
   assert.deepEqual(nestedScript(call('powershell', ['-co', 'Remove-Item x'])), { shell: 'powershell', script: 'Remove-Item x' });
   assert.deepEqual(nestedScript(call('powershell', ['-config', 'x', '-c', 'ri y'])), { shell: 'powershell', script: 'ri y' });

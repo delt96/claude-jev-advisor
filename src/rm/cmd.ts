@@ -1,11 +1,10 @@
 import path from 'node:path';
-import { denyReason, emptyRead, judgePath, resolveWindowsPath, splitWindowsPattern, type ReadCtx, type ReadResult, type RmTarget } from './targets.js';
+import { DELETE_WORDS, denyReason, emptyRead, judgePath, resolveWindowsPath, splitWindowsPattern, type ReadCtx, type ReadResult, type RmTarget } from './targets.js';
 
 const win = path.win32;
 const SHELLS = new Set(['sh', 'bash', 'cmd', 'powershell', 'pwsh']);
 const DELETES = new Set(['del', 'erase', 'rd', 'rmdir']);
 const CONTROL = new Set(['if', 'else', 'for', 'call', 'start']);
-const DELETE_WORD = /(?<![\w.-])(?:del|erase|rd|rmdir|rm|ri|remove-item)(?![\w-])|::\s*delete\b/i;
 const UNKNOWN = '\u0000';
 const EXCERPT_CHARS = 200;
 
@@ -115,11 +114,12 @@ function wordsOf(segment: string, delimiters: string): CmdWord[] {
   return words;
 }
 
-// cmd reads a built-in's name up to the first `/`, `,`, `;` or `=`, and `cd`'s up to a `.` or `\` too (`del/q`, `cd..`).
+// cmd reads a built-in's name up to the first `/`, `,`, `;` or `=`, and `cd`'s and `pushd`'s up to a `.` or `\` too
+// (`del/q`, `if,exist`, `cd..`, `pushd\`).
 function nameOf(word: CmdWord): { name: string; rest: string } | null {
   if (word.dynamic && /%\?%[^\\/]*$/.test(word.shown)) return null;
   const text = word.value.replace(/^@/, '');
-  const glued = /^(del|erase|rd|rmdir|cd|chdir|pushd|popd)([/,;=].*)$/i.exec(text) ?? /^(cd|chdir)([.\\].*)$/i.exec(text);
+  const glued = /^(del|erase|rd|rmdir|cd|chdir|pushd|popd|if|else|for|call|start)([/,;=].*)$/i.exec(text) ?? /^(cd|chdir|pushd)([.\\].*)$/i.exec(text);
   if (glued) return { name: glued[1].toLowerCase(), rest: glued[2] };
   return { name: win.basename(text.replace(/\//g, '\\')).replace(/\.(?:exe|com)$/i, '').toLowerCase(), rest: '' };
 }
@@ -162,7 +162,7 @@ export function readCmd(line: string, ctx: ReadCtx): ReadResult {
     return first !== undefined && (named === null || CONTROL.has(named.name));
   });
   if (control || hasBlock(expanded)) {
-    if (!DELETE_WORD.test(expanded)) return out;
+    if (!DELETE_WORDS.test(expanded)) return out;
     const shown = expanded.trim().replace(/\s+/g, ' ').slice(0, EXCERPT_CHARS).split(UNKNOWN).join('%?%');
     return deny(`a delete on a cmd line with if, else, for, call, start, parentheses or a command that cannot be worked out (${shown}); write plain del or rd lines, with names that hold parentheses in double quotes`);
   }
