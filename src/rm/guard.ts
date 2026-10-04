@@ -1,14 +1,13 @@
-import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { decisionOf, denyReason, emptyRead, judgePath, splitPattern, type Probe, type ReadCtx, type ReadResult, type RmDecision, type RmTarget } from './targets.js';
+
+export { hookOutput, realProbe, type Probe, type RmDecision, type RmTarget } from './targets.js';
 
 const win = path.win32;
 const SEPARATORS = new Set([';', '&&', '||', '|', '|&', '&', '(', ')']);
 const SKIP_WORDS = new Set(['then', 'else', 'elif', 'do', 'while', 'until', 'if', '!', '{', 'time']);
 const HEADER_WORDS = new Set(['for', 'select', 'case']);
 const CLOSING_WORDS = new Set(['done', 'fi', 'esac', '}']);
-const BUILD_DIRS = new Set(['target', 'build', 'dist', 'out', 'node_modules', 'coverage', '__pycache__', '.pytest_cache', '.gradle', '.next', '.nuxt', '.turbo', '.cache', 'bin', 'obj']);
-const MAX_LISTED = 3;
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
 const DECLARERS = new Set(['export', 'readonly', 'declare', 'typeset', 'local']);
 const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE'];
@@ -21,9 +20,6 @@ type Vars = Map<string, string | null>;
 type Resolved = { path?: string; unknown?: string; unresolvable?: string };
 type Classified = { real?: RmTarget; unresolvable?: string };
 
-export type Probe = { exists(p: string): boolean; isIgnored(p: string): boolean };
-export type RmTarget = { shown: string; path: string | null };
-export type RmDecision = { decision: 'ask' | 'deny'; reason: string; targets?: RmTarget[] };
 export type DecideInput = {
   command: string;
   cwd: string | null;
@@ -207,15 +203,6 @@ function toWindowsPath(word: Word, cwd: string | null, home: string, tmpdir: str
   return { path: win.resolve(cwd, v) };
 }
 
-function isInside(child: string, parent: string): boolean {
-  const c = child.toLowerCase();
-  const p = parent.toLowerCase().replace(/\\+$/, '');
-  return c.startsWith(`${p}\\`);
-}
-
-function segments(p: string): string[] {
-  return p.toLowerCase().split('\\');
-}
 
 function classify(target: WordToken, ctx: Ctx): Classified {
   if (target.brace) return { unresolvable: `brace expansion (${target.value})` };
@@ -224,40 +211,27 @@ function classify(target: WordToken, ctx: Ctx): Classified {
   let w: Word = { ...target, value, dynamic: false };
   let pattern: string | null = null;
   if (target.glob) {
-    const parts = value.split(/[\\/]/);
-    if (parts.slice(0, -1).some((s) => /[*?[]/.test(s))) return { unresolvable: `a wildcard in a folder name (${target.value})` };
-    pattern = parts[parts.length - 1];
-    w = { ...w, value: parts.slice(0, -1).join('/') || '.' };
+    const split = splitPattern(value, /[*?[]/);
+    if (split === null) return { unresolvable: `a wildcard in a folder name (${target.value})` };
+    pattern = split.pattern;
+    w = { ...w, value: split.dir };
   }
   const resolved = toWindowsPath(w, ctx.cwd, ctx.home, ctx.tmpdirs[0]);
   if (resolved.unresolvable) return { unresolvable: resolved.unresolvable };
   if (resolved.unknown) return { real: { shown: target.value, path: null } };
-  const p = resolved.path!;
-  const shown = pattern === null ? p : `${p}\\${pattern}`;
-  const narrowPattern = pattern !== null && !/^[*?.]+$/.test(pattern);
-  if (ctx.tmpdirs.some((t) => isInside(p, t) || (narrowPattern && p.toLowerCase() === t.toLowerCase().replace(/\\+$/, '')))) return {};
-  if (segments(p).includes('.superpowers')) return {};
-  if (pattern === null && !ctx.probe.exists(p)) return {};
-  if (segments(p).some((s) => BUILD_DIRS.has(s)) && ctx.probe.isIgnored(p)) return {};
-  return { real: { shown, path: pattern === null ? p : null } };
+  return { real: judgePath(resolved.path!, pattern, ctx) ?? undefined };
 }
 
-function deny(why: string): RmDecision {
-  return {
-    decision: 'deny',
-    reason: `rm-guard could not work out what this rm would delete (${why}). Rewrite it with literal paths: no shell variables, command substitutions, xargs, brace expansion or wildcards in folder names, and no cd to such a path before it. Example: rm -f "C:/full/path/file.txt". If you need a variable or a listing to find the paths, run that on its own first, then rm the printed paths.`,
-  };
-}
-
-export function decide({ command, cwd, home, tmpdirs, env = {}, probe }: DecideInput): RmDecision | null {
-  if (!/\b(?:rm|rmdir|xargs)\b/.test(command)) return null;
+export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: ReadCtx): ReadResult {
+  const out = emptyRead();
+  if (!/\b(?:rm|rmdir|xargs)\b/.test(command)) return out;
   const commands = splitCommands(tokenize(stripHeredocs(command)));
   const vars: Vars = new Map(KNOWN_ENV.filter((n) => env[n]).map((n): [string, string] => [n, env[n] as string]));
   const ctx: Ctx = { cwd, home, tmpdirs, probe, vars };
   const setCwd = (next: string | null) => { ctx.cwd = next; vars.set('PWD', next); };
+  const deny = (why: string): ReadResult => ({ ...out, deny: denyReason('bash', why) });
   setCwd(cwd);
   const stack: (string | null)[] = [];
-  const real: RmTarget[] = [];
   for (const { words, after } of commands) {
     const rest = stripPrefixes(words);
     if (!rest.length) {
@@ -275,9 +249,7 @@ export function decide({ command, cwd, home, tmpdirs, env = {}, probe }: DecideI
         else if (!arg) setCwd(home);
         else setCwd(toWindowsPath({ ...arg, value: value as string }, ctx.cwd, home, tmpdirs[0]).path ?? null);
       } else if (name === 'xargs') {
-        if (rest.slice(1).some((t) => { const n = commandName(t); return n === 'rm' || n === 'rmdir'; })) {
-          return deny('xargs feeding rm');
-        }
+        if (rest.slice(1).some((t) => { const n = commandName(t); return n === 'rm' || n === 'rmdir'; })) return deny('xargs feeding rm');
       } else if (name === 'rm' || name === 'rmdir') {
         let options = true;
         for (const t of rest.slice(1)) {
@@ -285,29 +257,16 @@ export function decide({ command, cwd, home, tmpdirs, env = {}, probe }: DecideI
           if (options && !t.dynamic && t.value.length > 1 && t.value.startsWith('-')) continue;
           const c = classify(t, ctx);
           if (c.unresolvable) return deny(c.unresolvable);
-          if (c.real) real.push(c.real);
+          if (c.real) out.targets.push(c.real);
         }
       }
     }
     if (after === '(') stack.push(ctx.cwd);
     if (after === ')' && stack.length) setCwd(stack.pop() ?? null);
   }
-  if (!real.length) return null;
-  const listed = real.slice(0, MAX_LISTED).map((t) => t.shown).join(', ');
-  const more = real.length > MAX_LISTED ? ` 외 ${real.length - MAX_LISTED}개` : '';
-  return { decision: 'ask', reason: `실제 파일 삭제: ${listed}${more}`, targets: real };
+  return out;
 }
 
-export function hookOutput({ decision, reason }: RmDecision): string {
-  return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision, permissionDecisionReason: reason } });
+export function decide({ command, env = {}, ...rest }: DecideInput): RmDecision | null {
+  return decisionOf(readBash(command, { ...rest, env }));
 }
-
-export const realProbe: Probe = {
-  exists(p) {
-    try { fs.lstatSync(p); return true; } catch { return false; }
-  },
-  isIgnored(p) {
-    const r = spawnSync('git', ['-C', win.dirname(p), 'check-ignore', '-q', '--', p], { timeout: 3000, windowsHide: true });
-    return r.status === 0;
-  },
-};

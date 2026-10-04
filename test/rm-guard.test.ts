@@ -218,3 +218,7 @@ test('an ask carries every real target, with a path only where one file or folde
   ]);
   assert.equal(run('rm -rf $(echo x)').result?.targets, undefined);
 });
+
+test('a wildcard right under a drive root is shown with one separator', () => {
+  assert.equal(reason('rm -f /c/*.log'), '실제 파일 삭제: C:\\*.log');
+});
