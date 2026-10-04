@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { decisionOf, denyReason, emptyRead, judgePath, splitWindowsPattern, type Probe, type ReadCtx, type ReadResult, type RmDecision, type RmTarget } from './targets.js';
+import { DELETE_WORDS, decisionOf, denyReason, emptyRead, judgePath, splitWindowsPattern, type Probe, type ReadCtx, type ReadResult, type RmDecision, type RmTarget } from './targets.js';
 
 export { hookOutput, realProbe, type Probe, type RmDecision, type RmTarget } from './targets.js';
 
@@ -11,6 +11,8 @@ const CLOSING_WORDS = new Set(['done', 'fi', 'esac', '}']);
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
 const DECLARERS = new Set(['export', 'readonly', 'declare', 'typeset', 'local']);
 const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE'];
+const SHELLS = new Set(['sh', 'bash', 'cmd', 'powershell', 'pwsh']);
+const SHELL_WORDS = /\b(?:sh|bash|cmd|powershell|pwsh)(?:\.exe)?\b/i;
 
 type Word = { value: string; dynamic: boolean; glob: boolean; tilde: boolean; brace: boolean };
 type WordToken = Word & { type: 'word' };
@@ -223,7 +225,7 @@ function classify(target: WordToken, ctx: Ctx): Classified {
 
 export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: ReadCtx): ReadResult {
   const out = emptyRead();
-  if (!/\b(?:rm|rmdir|xargs)\b/.test(command)) return out;
+  if (!/\b(?:rm|rmdir|xargs)\b/.test(command) && !SHELL_WORDS.test(command)) return out;
   const commands = splitCommands(tokenize(stripHeredocs(command)));
   const vars: Vars = new Map(KNOWN_ENV.filter((n) => env[n]).map((n): [string, string] => [n, env[n] as string]));
   const ctx: Ctx = { cwd, home, tmpdirs, probe, vars };
@@ -231,6 +233,7 @@ export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: Re
   const deny = (why: string): ReadResult => ({ ...out, deny: denyReason('bash', why) });
   setCwd(cwd);
   const stack: (string | null)[] = [];
+  let piped = false;
   for (const { words, after } of commands) {
     const rest = stripPrefixes(words);
     if (!rest.length) {
@@ -249,6 +252,9 @@ export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: Re
         else setCwd(toWindowsPath({ ...arg, value: value as string }, ctx.cwd, home, tmpdirs[0]).path ?? null);
       } else if (name === 'xargs') {
         if (rest.slice(1).some((t) => { const n = commandName(t); return n === 'rm' || n === 'rmdir'; })) return deny('xargs feeding rm');
+        if (rest.slice(1).some((t) => SHELLS.has(commandName(t) ?? '')) && DELETE_WORDS.test(rest.slice(1).map((t) => t.value).join(' '))) return deny('xargs feeding a shell that deletes');
+      } else if (name !== null && SHELLS.has(name)) {
+        out.shells.push({ name, args: rest.slice(1).map((t) => (t.brace ? null : expand(t, vars))), cwd: ctx.cwd, raw: rest.map((t) => t.value).join(' '), ...(piped ? { piped } : {}) });
       } else if (name === 'rm' || name === 'rmdir') {
         let options = true;
         for (const t of rest.slice(1)) {
@@ -260,6 +266,7 @@ export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: Re
         }
       }
     }
+    piped = after === '|' || after === '|&';
     if (after === '(') stack.push(ctx.cwd);
     if (after === ')' && stack.length) setCwd(stack.pop() ?? null);
   }

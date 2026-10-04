@@ -11,11 +11,12 @@ export type RmTarget = { shown: string; path: string | null };
 export type RmDecision = { decision: 'ask' | 'deny'; reason: string; targets?: RmTarget[] };
 export type Shell = 'bash' | 'powershell' | 'cmd';
 export type ReadCtx = { cwd: string | null; home: string; tmpdirs: string[]; env: Record<string, string | undefined>; probe: Probe };
-export type ShellCall = { name: string; args: (string | null)[]; cwd: string | null; raw: string };
+export type ShellCall = { name: string; args: (string | null)[]; cwd: string | null; raw: string; piped?: boolean };
 export type ReadResult = { deny: string | null; targets: RmTarget[]; failed: string[]; shells: ShellCall[] };
 export type Resolved = { path: string } | { unc: string } | { unresolvable: string };
 
 export const emptyRead = (): ReadResult => ({ deny: null, targets: [], failed: [], shells: [] });
+export const DELETE_WORDS = /\b(?:rm|rmdir|del|erase|rd|ri|remove-item)\b|::\s*delete\b/i;
 
 export function isInside(child: string, parent: string): boolean {
   const c = child.toLowerCase();

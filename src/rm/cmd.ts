@@ -29,9 +29,10 @@ function hasBlock(line: string): boolean {
   return false;
 }
 
-function segmentsOf(line: string): string[] {
-  const out: string[] = [];
+function segmentsOf(line: string): { text: string; piped: boolean }[] {
+  const out: { text: string; piped: boolean }[] = [];
   let current = '';
+  let piped = false;
   let quoted = false;
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
@@ -42,15 +43,16 @@ function segmentsOf(line: string): string[] {
     }
     const redirect = c === '&' && /[<>]$/.test(current);
     if (!quoted && !redirect && '&|\n'.includes(c)) {
-      out.push(current);
+      out.push({ text: current, piped });
       current = '';
+      piped = c === '|' && line[i + 1] !== '|';
       if ((c === '&' || c === '|') && line[i + 1] === c) i++;
       continue;
     }
     current += c;
   }
-  out.push(current);
-  return out.filter((s) => s.trim() !== '');
+  out.push({ text: current, piped });
+  return out.filter((s) => s.text.trim() !== '');
 }
 
 function wordsOf(segment: string, delimiters: string): CmdWord[] {
@@ -150,7 +152,8 @@ export function readCmd(line: string, ctx: ReadCtx): ReadResult {
   const deny = (why: string): ReadResult => ({ ...out, deny: denyReason('cmd', why) });
   const expanded = expandVars(line, vars);
   // cmd skips spaces, @, commas, semicolons and equals signs before a command name.
-  const segments = segmentsOf(expanded).map((s) => s.replace(/^[\s@,;=]+/, '')).filter((s) => s !== '');
+  const pieces = segmentsOf(expanded).map((s) => ({ ...s, text: s.text.replace(/^[\s@,;=]+/, '') })).filter((s) => s.text !== '');
+  const segments = pieces.map((s) => s.text);
   // if, else, for, call, start and parenthesized blocks run commands where this reader does not follow, and a partial
   // reading of them let real deletes through, so a line that uses them anywhere is refused as a whole when it deletes.
   const control = segments.some((s) => {
@@ -163,7 +166,7 @@ export function readCmd(line: string, ctx: ReadCtx): ReadResult {
     const shown = expanded.trim().replace(/\s+/g, ' ').slice(0, EXCERPT_CHARS).split(UNKNOWN).join('%?%');
     return deny(`a delete on a cmd line with if, else, for, call, start, parentheses or a command that cannot be worked out (${shown}); write plain del or rd lines, with names that hold parentheses in double quotes`);
   }
-  for (const segment of segments) {
+  for (const { text: segment, piped } of pieces) {
     const words = wordsOf(segment, '');
     if (!words.length) continue;
     const first = words[0];
@@ -174,7 +177,7 @@ export function readCmd(line: string, ctx: ReadCtx): ReadResult {
     if (/^[a-z]:$/i.test(first.value.replace(/^@/, ''))) {
       cwd = null;
     } else if (SHELLS.has(name)) {
-      out.shells.push({ name, args: words.slice(1).map((w) => (w.dynamic ? null : w.value)), cwd, raw: shown });
+      out.shells.push({ name, args: words.slice(1).map((w) => (w.dynamic ? null : w.value)), cwd, raw: shown, ...(piped ? { piped } : {}) });
     } else if (name === 'popd') {
       cwd = null;
     } else if (name === 'cd' || name === 'chdir' || name === 'pushd') {
