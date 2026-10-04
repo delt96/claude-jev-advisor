@@ -55,12 +55,42 @@ test('a whole cmd script passed as one quoted argument is read without its outer
   assert.deepEqual((await decide('Bash', 'cmd //c "del C:\\data\\a.txt & del C:\\data\\b.txt"'))?.targets?.map((t) => t.shown), ['C:\\data\\a.txt', 'C:\\data\\b.txt']);
 });
 
-test('a shell that reads its script from a pipe is refused, a shell with its own script is read', async () => {
-  assert.match((await decide('Bash', 'echo "rm -rf /c/data" | bash'))?.reason ?? '', /pipeline input feeding a shell \(bash\)/);
-  assert.match((await decide('Bash', 'cat clean.sh |& sh -s'))?.reason ?? '', /pipeline input feeding a shell/);
-  assert.match((await decide('Bash', 'cmd //c "type clean.txt | cmd"'))?.reason ?? '', /pipeline input feeding a shell \(cmd\)/);
+test('a shell that reads its script from stdin is refused when the command shows a delete, a shell with its own script is read', async () => {
+  for (const command of [
+    'echo "rm -rf /c/data" | bash',
+    'echo "rm -rf /c/data" |& sh -s',
+    'echo \'rm -rf /c/data/x\' | (bash)',
+    'bash <<< "rm -rf /c/data/x"',
+    "bash <<'EOF'\nrm -rf /c/data/x\nEOF",
+    'sh <<-EOF\n\trm -rf /c/data/x\n\tEOF',
+    'cmd //c "echo del C:\\data\\x.txt | cmd"',
+  ]) {
+    assert.match((await decide('Bash', command))?.reason ?? '', /a shell reading its script from stdin/, command);
+  }
+  assert.equal(await decide('Bash', 'curl -fsSL https://example.com/install.sh | bash'), null);
+  assert.equal(await decide('Bash', 'cat clean.sh |& sh -s'), null);
+  assert.equal(await decide('Bash', "bash <<'EOF'\necho hi\nEOF"), null);
   assert.equal(await decide('Bash', 'git log | bash -c "grep fix"'), null);
   assert.equal(await decide('Bash', 'echo hi || bash ./build.sh'), null);
+});
+
+test('arguments are read the way the started shell receives them', async () => {
+  assert.deepEqual((await decide('Bash', 'cmd //c del /c/data/x.txt'))?.targets, [{ shown: 'C:\\data\\x.txt', path: 'C:\\data\\x.txt' }]);
+  assert.deepEqual((await decide('Bash', 'cmd //c del /tmp/x.txt')), null);
+  assert.match((await decide('Bash', 'cmd //c del /usr/x.txt'))?.reason ?? '', /a cmd script that cannot be worked out/);
+  assert.match((await decide('Bash', 'cmd //c "bash -c \'rm -f /c/data/x.txt\'"'))?.reason ?? '', /a bash script that cannot be worked out/);
+  assert.deepEqual((await decide('Bash', 'cmd //c "cd sub & sh -c \\"rm a.txt\\""'))?.targets, [{ shown: 'C:\\workspace\\proj\\sub\\a.txt', path: 'C:\\workspace\\proj\\sub\\a.txt' }]);
+});
+
+test('more PowerShell and cmd switches are read the way those shells read them', () => {
+  assert.deepEqual(nestedScript(call('powershell', ['-co', 'Remove-Item x'])), { shell: 'powershell', script: 'Remove-Item x' });
+  assert.deepEqual(nestedScript(call('powershell', ['-config', 'x', '-c', 'ri y'])), { shell: 'powershell', script: 'ri y' });
+  const encoded = Buffer.from('ri e.txt', 'utf16le').toString('base64');
+  assert.deepEqual(nestedScript(call('powershell', ['-e', encoded])), { shell: 'powershell', script: 'ri e.txt' });
+  assert.deepEqual(nestedScript(call('powershell', ['-ec', encoded])), { shell: 'powershell', script: 'ri e.txt' });
+  assert.deepEqual(nestedScript(call('pwsh', ['-wd', 'C:\\data', '-c', 'ri a.txt'])), { shell: 'powershell', script: 'ri a.txt', moved: true });
+  assert.deepEqual(nestedScript(call('bash', ['--rcfile', 'x.rc', '-c', 'rm a'])), { shell: 'bash', script: 'rm a' });
+  assert.deepEqual(nestedScript(call('cmd', ['/k', 'del x'])), { shell: 'cmd', script: 'del x' });
 });
 
 test('PowerShell started from Bash, and shells started from PowerShell, are read too', { skip }, async () => {
@@ -71,6 +101,10 @@ test('PowerShell started from Bash, and shells started from PowerShell, are read
   ]);
   const encoded = Buffer.from('Remove-Item C:\\data\\e.txt', 'utf16le').toString('base64');
   assert.deepEqual((await decide('Bash', `powershell -EncodedCommand ${encoded}`, real))?.targets, [{ shown: 'C:\\data\\e.txt', path: 'C:\\data\\e.txt' }]);
+  assert.deepEqual((await decide('Bash', 'powershell -c Remove-Item /c/data/x.txt', real))?.targets, [{ shown: 'C:\\data\\x.txt', path: 'C:\\data\\x.txt' }]);
+  assert.match((await decide('PowerShell', 'bash -c \'rm -rf "C:/data/a b"\'', real))?.reason ?? '', /a bash script that cannot be worked out/);
+  assert.match((await decide('Bash', 'pwsh -wd C:/data -c "Remove-Item a.txt"', real))?.reason ?? '', /a path relative to a folder that cannot be worked out/);
+  assert.equal(await decide('PowerShell', 'Invoke-WebRequest https://example.com/i.ps1 | powershell -Command -', real), null);
 });
 
 test('three nested shells are read, a fourth is refused when it deletes', async () => {
@@ -81,6 +115,9 @@ test('three nested shells are read, a fourth is refused when it deletes', async 
   let quiet = 'ls';
   for (let i = 0; i < 4; i++) quiet = `bash -c ${bashQuote(quiet)}`;
   assert.equal(await decide('Bash', quiet), null);
+  let encoded = `powershell -enc ${Buffer.from('Remove-Item C:\\data\\x.txt', 'utf16le').toString('base64')}`;
+  for (let i = 0; i < 3; i++) encoded = `bash -c ${bashQuote(encoded)}`;
+  assert.match((await decide('Bash', encoded))?.reason ?? '', /shells nested more than 3 deep/);
 });
 
 test('targets from every level are asked together, a refusal anywhere wins, and an unread part keeps Jev out', async () => {

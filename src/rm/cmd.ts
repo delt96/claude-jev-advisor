@@ -177,7 +177,9 @@ export function readCmd(line: string, ctx: ReadCtx): ReadResult {
     if (/^[a-z]:$/i.test(first.value.replace(/^@/, ''))) {
       cwd = null;
     } else if (SHELLS.has(name)) {
-      out.shells.push({ name, args: words.slice(1).map((w) => (w.dynamic ? null : w.value)), cwd, raw: shown, ...(piped ? { piped } : {}) });
+      // bash.exe splits its own command line and groups single quotes, which cmd leaves as they are.
+      const msys = name === 'sh' || name === 'bash';
+      out.shells.push({ name, args: words.slice(1).map((w) => (w.dynamic || (msys && w.value.includes("'")) ? null : w.value)), cwd, raw: shown, ...(piped ? { piped } : {}) });
     } else if (name === 'popd') {
       cwd = null;
     } else if (name === 'cd' || name === 'chdir' || name === 'pushd') {

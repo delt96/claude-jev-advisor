@@ -447,9 +447,12 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
         const to = item.inBlock ? null : textOf(item.path);
         cwd = to === null ? null : folderOf(to, item.literal, cwd, ctx.home);
       } else if (item.kind === 'shell') {
-        if (item.inPipeline) return deny(`pipeline input feeding a shell (${item.raw})`);
+        if (item.inPipeline && DELETE_WORD.test(source)) return deny(`pipeline input feeding a shell (${item.raw})`);
         const here = item.ordered || !moves ? cwd : null;
-        out.shells.push({ name: item.name, args: item.args.map((a) => textOf(a, here)), cwd: here, raw: item.raw });
+        // Windows PowerShell passes an argument's inner double quotes to a program unescaped, so bash or PowerShell
+        // would split it differently; cmd reads its whole command line again and keeps them.
+        const args = item.args.map((a) => textOf(a, here)).map((t) => (t !== null && item.name !== 'cmd' && t.includes('"') ? null : t));
+        out.shells.push({ name: item.name, args, cwd: here, raw: item.raw });
       } else if (item.kind === 'dynamic') {
         // A named call runs its own text and its arguments; with an argument that cannot be worked out, or with no
         // name, it could run anything the command holds.

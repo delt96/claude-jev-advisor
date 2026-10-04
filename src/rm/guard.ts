@@ -12,12 +12,13 @@ const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
 const DECLARERS = new Set(['export', 'readonly', 'declare', 'typeset', 'local']);
 const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE'];
 const SHELLS = new Set(['sh', 'bash', 'cmd', 'powershell', 'pwsh']);
+const NATIVE_SHELLS = new Set(['cmd', 'powershell', 'pwsh']);
 const SHELL_WORDS = /\b(?:sh|bash|cmd|powershell|pwsh)(?:\.exe)?\b/i;
 
 type Word = { value: string; dynamic: boolean; glob: boolean; tilde: boolean; brace: boolean };
 type WordToken = Word & { type: 'word' };
-type Token = WordToken | { type: 'op'; value: string };
-type Command = { words: WordToken[]; after: string | null };
+type Token = WordToken | { type: 'op'; value: string } | { type: 'here' };
+type Command = { words: WordToken[]; after: string | null; here: boolean };
 type Vars = Map<string, string | null>;
 type BashPath = { path?: string; unknown?: string; unresolvable?: string };
 type Classified = { real?: RmTarget; unresolvable?: string };
@@ -116,6 +117,7 @@ function tokenize(text: string): Token[] {
       if (word !== null && /^\d+$/.test(word.value) && !word.dynamic) word = null;
       else finish();
       const m = /^(&>>?|\d*[<>]+[&|]?)/.exec(text.slice(i))!;
+      if (/^\d*<<<?$/.test(m[0])) tokens.push({ type: 'here' });
       i += m[0].length;
       if (/&$/.test(m[0]) && /^\d|^-/.test(text[i] ?? '')) { while (i < text.length && /[\d-]/.test(text[i])) i++; continue; }
       skipNextWord = true;
@@ -137,13 +139,16 @@ function tokenize(text: string): Token[] {
 function splitCommands(tokens: Token[]): Command[] {
   const commands: Command[] = [];
   let current: WordToken[] = [];
+  let here = false;
   for (const t of tokens) {
     if (t.type === 'op' && SEPARATORS.has(t.value)) {
-      commands.push({ words: current, after: t.value });
+      commands.push({ words: current, after: t.value, here });
       current = [];
+      here = false;
     } else if (t.type === 'word') current.push(t);
+    else if (t.type === 'here') here = true;
   }
-  commands.push({ words: current, after: null });
+  commands.push({ words: current, after: null, here });
   return commands;
 }
 
@@ -205,6 +210,19 @@ function toWindowsPath(word: Word, cwd: string | null, home: string, tmpdir: str
   return { path: win.resolve(cwd, v) };
 }
 
+// Git Bash rewrites an argument that looks like a POSIX path before it starts a Windows program such as cmd or
+// powershell: /c/x becomes C:/x, /s becomes S:/, /tmp/x the temp folder and //c becomes /c; any other absolute path
+// points into Git's own folder.
+function nativeArg(value: string | null, tmpdir: string): string | null {
+  if (value === null || !value.startsWith('/')) return value;
+  if (value.startsWith('//')) return value.slice(1);
+  const drive = /^\/([A-Za-z])(\/.*)?$/.exec(value);
+  if (drive) return `${drive[1].toUpperCase()}:${drive[2] ?? '/'}`;
+  const tmp = /^\/tmp(\/.*)?$/.exec(value);
+  if (tmp) return `${tmpdir}${(tmp[1] ?? '').replace(/\//g, '\\')}`;
+  return null;
+}
+
 function classify(target: WordToken, ctx: Ctx): Classified {
   if (target.brace) return { unresolvable: `brace expansion (${target.value})` };
   const value = expand(target, ctx.vars);
@@ -234,7 +252,7 @@ export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: Re
   setCwd(cwd);
   const stack: (string | null)[] = [];
   let piped = false;
-  for (const { words, after } of commands) {
+  for (const { words, after, here } of commands) {
     const rest = stripPrefixes(words);
     if (!rest.length) {
       for (const w of words) if (ASSIGNMENT.test(w.value)) assign(w, vars, home);
@@ -254,7 +272,8 @@ export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: Re
         if (rest.slice(1).some((t) => { const n = commandName(t); return n === 'rm' || n === 'rmdir'; })) return deny('xargs feeding rm');
         if (rest.slice(1).some((t) => SHELLS.has(commandName(t) ?? '')) && DELETE_WORDS.test(rest.slice(1).map((t) => t.value).join(' '))) return deny('xargs feeding a shell that deletes');
       } else if (name !== null && SHELLS.has(name)) {
-        out.shells.push({ name, args: rest.slice(1).map((t) => (t.brace ? null : expand(t, vars))), cwd: ctx.cwd, raw: rest.map((t) => t.value).join(' '), ...(piped ? { piped } : {}) });
+        const args = rest.slice(1).map((t) => (t.brace ? null : expand(t, vars)));
+        out.shells.push({ name, args: NATIVE_SHELLS.has(name) ? args.map((a) => nativeArg(a, tmpdirs[0])) : args, cwd: ctx.cwd, raw: rest.map((t) => t.value).join(' '), ...(piped || here ? { piped: true } : {}) });
       } else if (name === 'rm' || name === 'rmdir') {
         let options = true;
         for (const t of rest.slice(1)) {
@@ -266,7 +285,7 @@ export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: Re
         }
       }
     }
-    piped = after === '|' || after === '|&';
+    piped = after === '|' || after === '|&' || (piped && !words.length && after === '(');
     if (after === '(') stack.push(ctx.cwd);
     if (after === ')' && stack.length) setCwd(stack.pop() ?? null);
   }
