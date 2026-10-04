@@ -302,3 +302,59 @@ test('a git repository or worktree inside an ignored folder keeps it from being 
   fs.writeFileSync(path.join(root, 'feat', 'work.ts'), 'x');
   assert.equal(realFactProbe.list(root, 50)?.repo, true);
 });
+
+test('a repository right under an ignored folder is found even past the listing limit', { skip: process.platform !== 'win32' && 'the rm helper runs on Windows only' }, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-facts-deep-'));
+  const cache = path.join(root, 'feat', '.angular', 'cache');
+  fs.mkdirSync(cache, { recursive: true });
+  for (let i = 0; i < 60; i++) fs.writeFileSync(path.join(cache, `f${i}.json`), 'x');
+  fs.writeFileSync(path.join(root, 'feat', '.git'), 'gitdir: C:/somewhere/.git/worktrees/feat');
+  const listing = realFactProbe.list(path.join(root, 'feat'), 50);
+  assert.equal(listing?.more, true);
+  assert.equal(listing?.repo, true);
+  const nested = path.join(root, 'outer');
+  fs.mkdirSync(path.join(nested, 'a-cache'), { recursive: true });
+  for (let i = 0; i < 60; i++) fs.writeFileSync(path.join(nested, 'a-cache', `f${i}.json`), 'x');
+  fs.mkdirSync(path.join(nested, 'z-repo', '.git'), { recursive: true });
+  assert.equal(realFactProbe.list(nested, 50)?.repo, true);
+});
+
+test('a folder whose listing could not be read is never a candidate', () => {
+  assert.equal(candidateKind(facts({ folder: true, ignored: true, listing: null, createdBy: [] }), START), null);
+});
+
+test('a folder made in this session that holds a repository is not a session candidate', () => {
+  assert.equal(candidateKind(facts({ folder: true, listing: { entries: [], more: false, repo: true } }), START), null);
+  assert.equal(candidateKind(facts({ folder: true, listing: { entries: [], more: false, repo: false } }), START), 'session');
+});
+
+test('Push-Location, Pop-Location, a cd right before a semicolon and EnterWorktree all move the later calls of a message', () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cja-facts-moves-')), 's.jsonl');
+  const call = (message: string, id: string, name: string, input: object) => ({
+    type: 'assistant',
+    cwd: 'C:\\proj',
+    timestamp: '2026-10-03T01:05:00.000Z',
+    message: { id: message, content: [{ type: 'tool_use', id, name, input }] },
+  });
+  const rows = [
+    { type: 'user', timestamp: '2026-10-03T01:00:00.000Z', origin: { kind: 'human' }, message: { content: 'go' } },
+    call('m1', 'p1', 'PowerShell', { command: 'Push-Location docs' }),
+    call('m1', 'p2', 'PowerShell', { command: 'echo hi > notes.md' }),
+    call('m2', 'p3', 'PowerShell', { command: 'Pop-Location' }),
+    call('m2', 'p4', 'PowerShell', { command: 'echo hi > notes.md' }),
+    call('m3', 'b1', 'Bash', { command: 'cd; ls' }),
+    call('m3', 'b2', 'Bash', { command: 'echo hi > notes.md' }),
+    call('m4', 'w1', 'EnterWorktree', { name: 'feat' }),
+    call('m4', 'b3', 'Bash', { command: 'echo hi > notes.md' }),
+    call('m5', 'b4', 'Bash', { command: 'echo hi > notes.md' }),
+  ];
+  fs.writeFileSync(file, `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`);
+  assert.deepEqual(readSessionLog(file)?.calls.map((c) => c.cwd), ['C:\\proj', null, 'C:\\proj', null, 'C:\\proj', null, null, 'C:\\proj']);
+});
+
+test('inside one shell call, PowerShell location commands also stop relative names from counting', () => {
+  for (const move of ['Set-Location docs', 'sl docs', 'Push-Location docs', 'chdir docs']) {
+    assert.equal(createsTarget(bash(`${move}; echo hi > probe.txt`), 'C:\\workspace\\app\\probe.txt'), false, move);
+  }
+  assert.equal(createsTarget(bash('echo hi > probe.txt'), 'C:\\workspace\\app\\probe.txt'), true);
+});

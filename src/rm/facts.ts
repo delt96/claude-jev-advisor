@@ -33,7 +33,9 @@ export type Candidate = 'session' | 'ignored';
 const win = path.win32;
 const DELETING = /\b(?:rm|rmdir|del|erase|rd|ri|Remove-Item|xargs)\b/i;
 const GIT_LOCATION_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'];
-const CHANGES_FOLDER = /(^|[\s;&|(])(?:cd|pushd|popd|chdir|Set-Location|sl)(?=\s|$)/i;
+const MOVES = ['cd', 'pushd', 'popd', 'chdir', 'set-location', 'sl', 'push-location', 'pop-location'];
+const CHANGES_FOLDER = new RegExp(`(^|[\\s;&|(])(?:${MOVES.join('|')})(?=[\\s;&|)]|$)`, 'i');
+const MOVING_TOOLS = new Set(['EnterWorktree', 'ExitWorktree']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -87,6 +89,7 @@ function toolCalls(entries: Entry[]): ToolCall[] {
     const cwd = typeof entry.cwd === 'string' ? entry.cwd : null;
     for (const block of entry.message.content) {
       if (!isRecord(block) || block.type !== 'tool_use' || typeof block.name !== 'string' || !isRecord(block.input)) continue;
+      if (MOVING_TOOLS.has(block.name)) moved = true;
       const call = callOf(block.name, block.input, typeof block.id === 'string' ? results.get(block.id) : undefined, moved ? null : cwd);
       if (!call) continue;
       calls.push(call);
@@ -212,7 +215,7 @@ export function createsTarget(call: ToolCall, target: string): boolean {
     const name = win.basename((args[0] ?? '').replace(/\//g, '\\')).replace(/\.exe$/i, '').toLowerCase();
     if ((name === 'touch' || name === 'mkdir') && args.slice(1).some(isTarget)) return true;
     if (name === 'curl' && args.some((w, i) => (w === '-o' || w === '--output') && isTarget(args[i + 1]))) return true;
-    if (name === 'cd' || name === 'pushd' || name === 'popd') moved = true;
+    if (MOVES.includes(name)) moved = true;
   }
   return false;
 }
@@ -238,8 +241,10 @@ export function gatherFacts(target: string, session: SessionLog, probe: FactProb
 export function candidateKind(facts: TargetFacts, startedAt: number): Candidate | null {
   const fresh = (bornAt: number) => bornAt >= startedAt;
   const freshInside = !facts.folder || (facts.listing !== null && !facts.listing.more && facts.listing.entries.every((e) => fresh(e.bornAt)));
-  if (!facts.tracked && !facts.existedBefore && facts.createdBy.length > 0 && fresh(facts.bornAt) && freshInside) return 'session';
-  if (facts.folder && facts.ignored && !facts.listing?.repo) return 'ignored';
+  // A listing that could not be read may hide a repository, so it counts as holding one.
+  const repo = facts.folder && (facts.listing === null || facts.listing.repo);
+  if (!facts.tracked && !facts.existedBefore && facts.createdBy.length > 0 && fresh(facts.bornAt) && freshInside && !repo) return 'session';
+  if (facts.folder && facts.ignored && !repo) return 'ignored';
   return null;
 }
 
@@ -283,6 +288,10 @@ export const realFactProbe: FactProbe = {
     };
     try {
       walk(dir, '');
+      // The walk goes depth first and stops at the limit, so a repository right under the folder can lie past it.
+      if (!repo) {
+        repo = fs.readdirSync(dir, { withFileTypes: true }).some((item) => item.name === '.git' || (item.isDirectory() && fs.existsSync(path.join(dir, item.name, '.git'))));
+      }
       return { entries, more, repo };
     } catch {
       return null;
