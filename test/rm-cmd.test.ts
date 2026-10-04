@@ -84,28 +84,51 @@ test('shells started from cmd are handed back with their arguments and folder', 
   assert.equal(result.deny, null);
 });
 
-test('a delete inside if, else, for, call, start or a block is refused with a hint to write a plain line', () => {
+test('a delete on a line with if, else, for, call, start or parentheses is refused as a whole, with a hint', () => {
   for (const line of [
     'if exist dist2 rmdir /s /q dist2',
     'if /i not "%FOO%"=="x" del a.txt',
     'if exist a.txt (del a.txt) else (del b.txt)',
     'if exist a.txt (echo yes) else del b.txt',
+    'if exist a.txt (\n  echo yes\n) else del b.txt',
     'if exist a.txt (del a.txt) else if exist b.txt del b.txt',
     'if exist x del report(1).txt',
     'if exist x (for %f in (*.txt) do del %f)',
+    'if exist dist (echo cleaning & rd /s /q dist)',
+    'for %f in (*.log) do (echo %f & del b.txt)',
     'for %f in (*.txt) do del %f',
+    'if exist sub cd sub & del y.txt',
+    '(cd sub) & del y.txt',
     'call del x.txt',
     'start "" /b del y.txt',
     '(del a.txt) & (del b.txt)',
+    '@(echo a & del b.txt)',
+    'echo (hi) & del a.txt',
     '%X% del a.txt',
   ]) {
-    assert.match(denied(line) ?? '', /a delete inside if, else, for, call, start, a block or a command that cannot be worked out \(.*\); write it as a plain del or rd line/, line);
+    assert.match(denied(line) ?? '', /a delete on a cmd line with if, else, for, call, start, parentheses or a command that cannot be worked out \(.*\); write plain del or rd lines, with names that hold parentheses in double quotes/, JSON.stringify(line));
   }
 });
 
-test('if, for, call and start lines that do not delete are left alone', () => {
-  for (const line of ['if exist a.txt echo found', 'if %ERRORLEVEL% neq 0 exit /b 1', 'if exist node_modules (echo ok) else (npm install)', 'for /f "tokens=*" %i in (\'git status\') do echo %i', 'call build.bat', 'start "" notepad notes.txt']) {
+test('lines with if, for, call, start or parentheses that do not delete are left alone', () => {
+  for (const line of [
+    'if exist a.txt echo found',
+    'if %ERRORLEVEL% neq 0 exit /b 1',
+    'if exist node_modules (echo ok) else (npm install)',
+    'for /f "tokens=*" %i in (\'git status\') do echo %i',
+    'call build.bat',
+    'start "" notepad notes.txt',
+    'if errorlevel 1 docker run --rm img',
+    'start "" docker run --rm -it ubuntu',
+    'for %f in (*.rm) do echo %f',
+  ]) {
     assert.deepEqual(read(line), { deny: null, targets: [], failed: [], shells: [] }, line);
+  }
+});
+
+test('spaces, @, commas, semicolons and equals signs before a command name are skipped', () => {
+  for (const line of [',del a.txt', '; del a.txt', '=del a.txt', '@ del a.txt', '  @del a.txt']) {
+    assert.deepEqual(shown(line), ['C:\\workspace\\proj\\a.txt'], line);
   }
 });
 
@@ -117,8 +140,10 @@ test('a switch right after the name, cd.. and cd\\ are read the way cmd reads th
   assert.deepEqual(shown('del,a.txt'), ['C:\\workspace\\proj\\a.txt']);
 });
 
-test('parentheses inside a name belong to it', () => {
-  assert.deepEqual(shown('del report(1).txt'), ['C:\\workspace\\proj\\report(1).txt']);
+test('a name with parentheses is read when quoted or escaped, and refused when bare', () => {
+  assert.deepEqual(shown('del "report(1).txt"'), ['C:\\workspace\\proj\\report(1).txt']);
+  assert.deepEqual(shown('del report^(1^).txt'), ['C:\\workspace\\proj\\report(1).txt']);
+  assert.match(denied('del report(1).txt') ?? '', /names that hold parentheses in double quotes/);
 });
 
 test('del /s deletes the name in every subfolder, so it asks for it as a pattern', () => {
@@ -135,7 +160,7 @@ test('a command name behind an unknown variable is still read when its last part
   assert.deepEqual(read('"%ProgramFiles%\\Git\\bin\\bash.exe" -c "rm -rf x"').shells, [
     { name: 'bash', args: ['-c', 'rm -rf x'], cwd: PROJECT, raw: '"%?%\\Git\\bin\\bash.exe" -c "rm -rf x"' },
   ]);
-  assert.deepEqual(shown('%EDITOR% notes.txt & del y.txt'), ['C:\\workspace\\proj\\y.txt']);
+  assert.match(denied('%EDITOR% notes.txt & del y.txt') ?? '', /a command that cannot be worked out \(%\?% notes\.txt & del y\.txt\)/);
 });
 
 test('%CD% is the folder the line started in, and a drive-relative wildcard is refused', () => {

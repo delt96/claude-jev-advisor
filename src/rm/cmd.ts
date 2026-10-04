@@ -5,8 +5,9 @@ const win = path.win32;
 const SHELLS = new Set(['sh', 'bash', 'cmd', 'powershell', 'pwsh']);
 const DELETES = new Set(['del', 'erase', 'rd', 'rmdir']);
 const CONTROL = new Set(['if', 'else', 'for', 'call', 'start']);
-const DELETE_WORD = /\b(?:del|erase|rd|rmdir|rm|ri|remove-item)\b|::\s*delete\b/i;
+const DELETE_WORD = /(?<![\w.-])(?:del|erase|rd|rmdir|rm|ri|remove-item)(?![\w-])|::\s*delete\b/i;
 const UNKNOWN = '\u0000';
+const EXCERPT_CHARS = 200;
 
 type CmdWord = { value: string; dynamic: boolean; shown: string; end: number };
 
@@ -16,6 +17,16 @@ function expandVars(line: string, vars: Map<string, string>): string {
     .replace(/%([^%\s"]+)%/g, (_m, name: string) => vars.get(name.toLowerCase()) ?? UNKNOWN)
     .replace(/%~[^\s"]*/g, UNKNOWN)
     .replace(/![^!\s"]+!/g, UNKNOWN);
+}
+
+function hasBlock(line: string): boolean {
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '"') quoted = !quoted;
+    else if (!quoted && line[i] === '^') i++;
+    else if (!quoted && (line[i] === '(' || line[i] === ')')) return true;
+  }
+  return false;
 }
 
 function segmentsOf(line: string): string[] {
@@ -137,18 +148,27 @@ export function readCmd(line: string, ctx: ReadCtx): ReadResult {
   if (ctx.cwd !== null) vars.set('cd', ctx.cwd);
   let cwd = ctx.cwd;
   const deny = (why: string): ReadResult => ({ ...out, deny: denyReason('cmd', why) });
-  for (const segment of segmentsOf(expandVars(line, vars))) {
+  const expanded = expandVars(line, vars);
+  // cmd skips spaces, @, commas, semicolons and equals signs before a command name.
+  const segments = segmentsOf(expanded).map((s) => s.replace(/^[\s@,;=]+/, '')).filter((s) => s !== '');
+  // if, else, for, call, start and parenthesized blocks run commands where this reader does not follow, and a partial
+  // reading of them let real deletes through, so a line that uses them anywhere is refused as a whole when it deletes.
+  const control = segments.some((s) => {
+    const first = wordsOf(s, '')[0];
+    const named = first ? nameOf(first) : null;
+    return first !== undefined && (named === null || CONTROL.has(named.name));
+  });
+  if (control || hasBlock(expanded)) {
+    if (!DELETE_WORD.test(expanded)) return out;
+    const shown = expanded.trim().replace(/\s+/g, ' ').slice(0, EXCERPT_CHARS).split(UNKNOWN).join('%?%');
+    return deny(`a delete on a cmd line with if, else, for, call, start, parentheses or a command that cannot be worked out (${shown}); write plain del or rd lines, with names that hold parentheses in double quotes`);
+  }
+  for (const segment of segments) {
     const words = wordsOf(segment, '');
     if (!words.length) continue;
     const first = words[0];
-    const named = nameOf(first);
+    const named = nameOf(first) as { name: string; rest: string };
     const shown = segment.trim().split(UNKNOWN).join('%?%');
-    // if, else, for, call, start and blocks run commands in places this reader does not follow, so a delete there is
-    // refused rather than guessed at.
-    if (named === null || CONTROL.has(named.name) || segment.trimStart().startsWith('(')) {
-      if (DELETE_WORD.test(segment)) return deny(`a delete inside if, else, for, call, start, a block or a command that cannot be worked out (${shown}); write it as a plain del or rd line`);
-      continue;
-    }
     const { name, rest } = named;
     const args = () => [...(rest ? wordsOf(rest, ',;=') : []), ...wordsOf(segment.slice(first.end), ',;=')];
     if (/^[a-z]:$/i.test(first.value.replace(/^@/, ''))) {
