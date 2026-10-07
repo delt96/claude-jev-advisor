@@ -48,7 +48,8 @@ async function liveSize($: Engine): Promise<number | null> {
 }
 
 function reason(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  const message = err instanceof Error ? err.message : String(err);
+  return message.replace(/^[^:]+: \$\.[\w]+(?:\.[\w]+)*: /, '');
 }
 
 async function press($: Engine, kind: AdviceKind): Promise<void> {
@@ -152,8 +153,10 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
       if (current && current.context.enabled && current.display === 'mod' && props.isWorking !== true && props.hasSurvey !== true) {
         const size = await liveSize($);
         const advice = bandAdvice({ size, threshold, judgment: judgmentFor(size), config: current });
-        if (advice) band = drawBand($.ui.resolve(e), { advice, config: current, onPress: () => {
-          handledAt = state?.at ?? handledAt;
+        const at = state?.at;
+        if (advice && at !== undefined) band = drawBand($.ui.resolve(e), { advice, config: current, onPress: () => {
+          if (at <= handledAt) return;
+          handledAt = at;
           void press($, advice.kind);
         } });
       }

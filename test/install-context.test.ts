@@ -188,7 +188,9 @@ test('switching away from the mod display and uninstalling take out only our bin
   const chat = { context: 'Chat', bindings: { 'ctrl+e': 'chat:externalEditor' } };
   writeKb(home, { bindings: [chat] });
   install(opts(home));
-  install(opts(home, { display: 'statusline' }));
+  const switched = install(opts(home, { display: 'statusline' }));
+  assert.equal(switched.shortcutRemoved?.removed, true);
+  assert.ok(switched.shortcutRemoved?.backup);
   assert.deepEqual(readKb(home).bindings, [chat]);
   assert.equal(readConfig(home).shortcut, null);
   install(opts(home, { display: 'mod' }));

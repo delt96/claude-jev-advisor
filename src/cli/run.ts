@@ -146,6 +146,10 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
         if (r.backup) io.out(`backup: ${r.backup}`);
         if (r.shortcut) io.out(shortcutLine(r.shortcut));
         if (r.shortcut?.backup) io.out(`backup: ${r.shortcut.backup}`);
+        if (r.shortcutRemoved?.removed) {
+          io.out(`removed the ${SHORTCUT_CHORD} shortcut from keybindings.json`);
+          if (r.shortcutRemoved.backup) io.out(`backup: ${r.shortcutRemoved.backup}`);
+        }
         if (r.installed.length) {
           io.out(
             r.display === 'mod'

@@ -27,6 +27,7 @@ export type InstallResult = {
   replacedLegacyRmGuard: boolean;
   display: Display | null;
   shortcut: ShortcutInstall | null;
+  shortcutRemoved: { removed: boolean; backup: string | null } | null;
 };
 
 function withoutFeature(settings: Settings, feature: Feature): Settings {
@@ -85,8 +86,9 @@ export function install(opts: InstallOptions): InstallResult {
   const backup = same(before, next) ? null : save(opts.home, next, opts.now);
   forgetStatusLineBefore(opts.home, next);
   let shortcut: ShortcutInstall | null = null;
+  let shortcutRemoved: InstallResult['shortcutRemoved'] = null;
   if (display === 'mod') shortcut = installShortcut(opts.home, opts.now);
-  else if (display !== null) removeShortcut(opts.home, opts.now);
+  else if (display !== null) shortcutRemoved = removeShortcut(opts.home, opts.now);
   updateConfig(opts.home, (c) => ({
     ...c,
     lang: opts.lang ?? c.lang,
@@ -96,7 +98,7 @@ export function install(opts: InstallOptions): InstallResult {
     rm: installed.includes('rm') ? { ...c.rm, enabled: true } : c.rm,
     context: installed.includes('context') ? { ...c.context, enabled: true } : c.context,
   }));
-  return { settingsFile: file, backup, installed, skipped, replacedLegacyRmGuard, display, shortcut };
+  return { settingsFile: file, backup, installed, skipped, replacedLegacyRmGuard, display, shortcut, shortcutRemoved };
 }
 
 export function uninstall(opts: { home: string; features: Feature[]; now: Date; delimiter?: string }): { settingsFile: string; backup: string | null; removed: Feature[]; shortcut: { removed: boolean; backup: string | null } | null } {

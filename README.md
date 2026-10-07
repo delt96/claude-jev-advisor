@@ -39,6 +39,8 @@ Before it changes `~/.claude/settings.json`, `install` copies it to `~/.claude/b
 
 After upgrading from 0.2 or earlier, run `claude-jev-advisor install rm` again so that the rm hook also covers the PowerShell tool. Until you do, `status` shows `Bash only`.
 
+After upgrading from 0.3 or earlier, run `claude-jev-advisor install context` again so that it binds `ctrl+x d` for the advice button. Until you do, `status` shows `shortcut: none - run "claude-jev-advisor install context" ...`.
+
 The hooks also reach Claude Code sessions that are already open; the bottom-row display and the advice button start with the next new session. Turning a helper on or off applies at once, even to open sessions.
 
 ## Commands
@@ -79,7 +81,7 @@ With the mod display (the default):
 
 The button runs `/compact` or `/clear` at once; a `/clear` can be undone with `/resume`. Click it, press `ctrl+x d`, or press `ctrl+x tab` and then Enter. It is not drawn while a request runs or while Claude Code waits for your answer to a question, and once pressed it stays away until Jev judges a newer reply. A refused `/compact` (too few messages, for example) shows the reason in a toast.
 
-`install` writes the shortcut to `~/.claude/keybindings.json` as `"ctrl+x d": "diff:back"` in the `DiffDialog` block. Claude Code lets a mod's button take the key of one of its own actions while that action is not in use; `diff:back` has no key of its own and works only inside the diff dialog, where `ctrl+x d` keeps doing that. If `ctrl+x d` is already bound in your file, or the file cannot be read, `install` leaves the file alone and says so, and the button is pressed with a click or `ctrl+x tab`. Press `d` without `ctrl`: `ctrl+d` is Claude Code's exit key. `uninstall context` and switching to another display take the line out again if it is still ours.
+`install` writes the shortcut to `~/.claude/keybindings.json` as `"ctrl+x d": "diff:back"` in the `DiffDialog` block. Claude Code lets a mod's button take the key of one of its own actions while that action is not in use; `diff:back` has no key of its own and works only inside the diff dialog, where `ctrl+x d` keeps doing that. If `ctrl+x d` is already bound in your file, or the file cannot be read, `install` leaves the file alone and says so, and the button is pressed with a click or `ctrl+x tab`. Press `d` without `ctrl`: `ctrl+d` is Claude Code's exit key. `uninstall context` and switching to another display take the line out again if it is still ours. To keep `install` from binding it, set `"ctrl+x d": null` in any block of that file.
 
 With `--lang en` the advice reads `Start fresh? /clear`, `Wrap up what you have and continue? /compact` and `When this work is done, wrap up and continue? /compact`.
 

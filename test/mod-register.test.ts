@@ -317,6 +317,7 @@ test('pressing clear runs /clear', async () => {
   await h.start();
   await h.press(await h.band());
   assert.deepEqual(h.calls.run, [{ command: 'clear' }]);
+  assert.equal(await h.band(), 'engine');
 });
 
 test('a refused compact is shown as a toast and its button does not come back', async () => {
@@ -344,4 +345,35 @@ test('after the session ends the band is gone before the poller runs again', asy
   assert.notEqual(await h.band(), 'engine');
   await h.end();
   assert.equal(await h.band(), 'engine');
+});
+
+test('engine prefixes are removed from compact rejection toasts', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: COMPACT_STATE }, tokens: 312000, threshold: 967000, fail: { compact: 'jev-advisor: $.session.compact: Not enough messages to compact.' } });
+  await h.start();
+  await h.press(await h.band());
+  assert.deepEqual(h.toasts, ['/compact: Not enough messages to compact.']);
+});
+
+test('the same drawn button handles each judgment only once', async () => {
+  for (const saved of [COMPACT_STATE, CLEAR_STATE]) {
+    const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: saved }, tokens: 312000, threshold: 967000 });
+    await h.start();
+    const tree = await h.band();
+    await h.press(tree);
+    await h.press(tree);
+    assert.equal(h.calls.compact, saved === COMPACT_STATE ? 1 : 0);
+    assert.deepEqual(h.calls.run, saved === CLEAR_STATE ? [{ command: 'clear' }] : []);
+  }
+});
+
+test('pressing an older tree leaves a newer polled judgment unhandled', async () => {
+  const files: Record<string, unknown> = { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: COMPACT_STATE };
+  const h = harness({ files, tokens: 312000, threshold: 967000 });
+  await h.start();
+  const tree = await h.band();
+  files[STATE_FILE] = state(1500, 312000, { phase: 'unit_done', clear: true });
+  await h.tick();
+  await h.press(tree);
+  assert.equal(h.calls.compact, 1);
+  assert.ok(String(buttonOf(await h.band())?.props.label).includes('/clear'));
 });

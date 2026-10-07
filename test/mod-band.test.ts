@@ -35,6 +35,7 @@ test('the band holds the advice question and one button for the advised command'
     const tree = draw({ kind, remainingPct: null });
     const all = buttons(tree);
     assert.equal(all.length, 1);
+    assert.equal(all[0]?.props.autoFocus, true);
     assert.ok(String(all[0]?.props.label).includes(`/${kind}`));
     assert.ok(words(tree).includes(adviceQuestion(kind, 'ko')));
   }

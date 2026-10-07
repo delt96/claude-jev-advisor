@@ -93,3 +93,12 @@ test('install prints the shortcut it bound, and uninstall says it took it out', 
   const u = await cli(['uninstall', 'context'], r.home);
   assert.match(u.out, /removed the ctrl\+x d shortcut from keybindings\.json/);
 });
+
+test('switching display reports the shortcut removal and its backup', async () => {
+  const home = tempHome();
+  await cli(['install', 'context'], home);
+  const r = await cli(['install', 'context', '--display', 'statusline'], home);
+  assert.equal(r.code, 0);
+  assert.equal(r.err, '');
+  assert.match(r.out, /removed the ctrl\+x d shortcut from keybindings\.json\nbackup: .*keybindings/);
+});

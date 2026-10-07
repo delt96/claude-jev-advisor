@@ -129,6 +129,15 @@ export function removeShortcut(home: string, now: Date): { removed: boolean; bac
   }
 }
 
+export function shortcutTakenInFile(home: string): string | null {
+  try {
+    const read = readKeybindings(keybindingsPath(home));
+    return read === null || read === 'missing' ? null : shortcutTakenBy(read);
+  } catch {
+    return null;
+  }
+}
+
 export function shortcutState(home: string): ShortcutState {
   try {
     const read = readKeybindings(keybindingsPath(home));

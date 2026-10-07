@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readConfig, type Config } from './config.js';
-import { shortcutState } from './display/keybindings.js';
+import { shortcutState, shortcutTakenInFile } from './display/keybindings.js';
+import { SHORTCUT_CHORD } from './display/shortcut.js';
 import { adviceLine, formatSize, parseState, type ContextState } from './display/line.js';
 import { PLUGIN_DIRS_ENV, isOurStatusLine } from './display/settings.js';
 import { FEATURES, HOOK_SPECS, LEGACY_RM_GUARD, MOD_DIR_PATTERN, MOD_PLUGIN_NAME, ownScriptPattern } from './features.js';
@@ -41,7 +42,11 @@ function newestState(home: string): ContextState | null {
 }
 
 function shortcutLine(home: string, config: Config): string {
-  if (!config.shortcut) return '  shortcut: none (press the button with a click, or ctrl+x tab then Enter)';
+  const takenBy = shortcutTakenInFile(home);
+  if (!config.shortcut) return takenBy
+    ? `  shortcut: none - ${SHORTCUT_CHORD} is already bound (${takenBy}); press the button with a click, or ctrl+x tab then Enter`
+    : `  shortcut: none - run "claude-jev-advisor install context" to bind ${SHORTCUT_CHORD}`;
+  if (takenBy) return `  shortcut: ${config.shortcut} (also bound by ${takenBy}, which wins - run "claude-jev-advisor install context")`;
   const state = shortcutState(home);
   if (state === 'present') return `  shortcut: ${config.shortcut}`;
   const why = state === 'unreadable' ? 'keybindings.json cannot be read' : 'missing from keybindings.json';

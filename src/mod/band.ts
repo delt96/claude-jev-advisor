@@ -15,6 +15,7 @@ export function drawBand(ui: BandElements, { advice, config, onPress }: BandInpu
       key: `jev-${advice.kind}`,
       label: `${ICONS[advice.kind]} /${advice.kind}`,
       variant: 'primary',
+      autoFocus: true,
       hover: { bold: true },
       onPress,
       ...(config.shortcut ? { action: SHORTCUT_ACTION } : {}),

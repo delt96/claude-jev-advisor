@@ -69,3 +69,25 @@ test('the mod display lists its shortcut, and says when keybindings.json lost it
   assert.ok(statusLines(home, {}).includes('  shortcut: ctrl+x d (missing from keybindings.json - run "claude-jev-advisor install context")'));
   assert.equal(statusLines(installedHome('message'), {}).some((l) => l.startsWith('  shortcut:')), false);
 });
+
+test('a mod without a recorded shortcut tells upgraders to install again', () => {
+  const home = installedHome();
+  writeConfig(home, { ...readConfig(home), shortcut: null });
+  fs.rmSync(keybindingsPath(home));
+  assert.ok(statusLines(home, {}).includes('  shortcut: none - run "claude-jev-advisor install context" to bind ctrl+x d'));
+});
+
+test('a taken chord explains why no shortcut is recorded', () => {
+  const home = installedHome();
+  writeConfig(home, { ...readConfig(home), shortcut: null });
+  fs.writeFileSync(keybindingsPath(home), JSON.stringify({ bindings: [{ context: 'Chat', bindings: { 'ctrl+x d': null } }] }));
+  assert.ok(statusLines(home, {}).includes('  shortcut: none - ctrl+x d is already bound (Chat: null); press the button with a click, or ctrl+x tab then Enter'));
+});
+
+test('another binding that takes a recorded shortcut is reported', () => {
+  const home = installedHome();
+  const kb = JSON.parse(fs.readFileSync(keybindingsPath(home), 'utf8'));
+  kb.bindings.push({ context: 'Chat', bindings: { 'ctrl+x d': 'chat:stash' } });
+  fs.writeFileSync(keybindingsPath(home), JSON.stringify(kb));
+  assert.ok(statusLines(home, {}).includes('  shortcut: ctrl+x d (also bound by Chat: chat:stash, which wins - run "claude-jev-advisor install context")'));
+});
