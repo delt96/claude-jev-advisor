@@ -26,6 +26,14 @@ context helper의 조언(🟡/🔴 `/compact`·`/clear`)을 읽기만 하는 문
 2. `keybindings.json`을 고친 뒤 이미 열린 세션에도 바로 적용되는가. 새 세션부터라면 install 출력에 그렇게 적는다.
 3. `turn.start` 시점의 `$.session.usage()` 토큰 수가 요청 직전 크기인가.
 
+## 확인 결과 (Task 1, 2026-10-07)
+
+시험 mod의 `fill /clear` 버튼에 `action="diff:back"`을 주고, `~/.claude/keybindings.json`에 `DiffDialog` 영역의 `"ctrl+x d": "diff:back"`을 넣어 시험했다.
+
+1. **`ctrl+x d` → 버튼:** 된다. 입력칸에서 `ctrl+x d`를 누르면 버튼이 눌려 `/clear`가 채워졌다(로그에 세 번 기록). 동작 이름과 영역은 바꾸지 않는다.
+2. **이미 열린 세션에 바로 적용되는지:** 확인 못 함. 파일을 쓸 때 열린 시험 세션이 없었고, 시험은 그 뒤에 새로 띄운 세션에서 했다. install 출력은 이미 "advice button은 다음 새 세션부터"라고 안내하므로 그대로 둔다.
+3. **`turn.start` 시점의 크기:** 요청 직전 크기다. 두 번째 요청의 `turn.start`가 첫 번째 요청의 `turn.complete`와 같았다(54849). `/clear` 바로 뒤 첫 요청의 `turn.start`에서는 토큰 수가 없어서, 그 요청에는 증가량이 표시되지 않는다.
+
 ## 기능 요구 (고정)
 
 ### 상황별 표시 (`display: "mod"`일 때)
