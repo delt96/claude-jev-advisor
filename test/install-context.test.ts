@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { install, setEnabled, uninstall } from '../src/install.js';
 import { readConfig } from '../src/config.js';
-import { backupsDir, dataDir, settingsPath, statusLineBeforePath } from '../src/paths.js';
+import { backupsDir, dataDir, keybindingsPath, settingsPath, statusLineBeforePath } from '../src/paths.js';
 
 const DIST = 'C:/n/@delt/claude-jev-advisor/dist';
 const MOD = 'C:/n/@delt/claude-jev-advisor/mod';
@@ -144,4 +144,63 @@ test('a settings.json that cannot be saved does not lose the user status line', 
   install(opts(home, { display: 'mod' }));
   assert.deepEqual(readSettings(home).statusLine, userLine);
   assert.equal(fs.existsSync(statusLineBeforePath(home)), false);
+});
+
+const OURS = { context: 'DiffDialog', bindings: { 'ctrl+x d': 'diff:back' } };
+const readKb = (home: string) => JSON.parse(fs.readFileSync(keybindingsPath(home), 'utf8'));
+function writeKb(home: string, value: unknown) {
+  fs.mkdirSync(path.dirname(keybindingsPath(home)), { recursive: true });
+  fs.writeFileSync(keybindingsPath(home), JSON.stringify(value));
+}
+
+test('install context with the mod display binds ctrl+x d and records it', () => {
+  const home = tempHome();
+  const r = install(opts(home));
+  assert.deepEqual(r.shortcut, { shortcut: 'ctrl+x d', takenBy: null, problem: null, backup: null });
+  assert.deepEqual(readKb(home).bindings, [OURS]);
+  assert.equal(readConfig(home).shortcut, 'ctrl+x d');
+});
+
+test('a chord the user already uses is kept, and the shortcut is recorded as none', () => {
+  const home = tempHome();
+  writeKb(home, { bindings: [{ context: 'Chat', bindings: { 'ctrl+x d': 'chat:stash' } }] });
+  const before = fs.readFileSync(keybindingsPath(home), 'utf8');
+  const r = install(opts(home));
+  assert.deepEqual(r.installed, ['context']);
+  assert.equal(r.shortcut?.takenBy, 'Chat: chat:stash');
+  assert.equal(readConfig(home).shortcut, null);
+  assert.equal(fs.readFileSync(keybindingsPath(home), 'utf8'), before);
+});
+
+test('a keybindings.json that is not JSON does not stop install', () => {
+  const home = tempHome();
+  fs.mkdirSync(path.dirname(keybindingsPath(home)), { recursive: true });
+  fs.writeFileSync(keybindingsPath(home), '{ not json');
+  const r = install(opts(home));
+  assert.deepEqual(r.installed, ['context']);
+  assert.ok(r.shortcut?.problem);
+  assert.equal(readConfig(home).shortcut, null);
+  assert.equal(fs.readFileSync(keybindingsPath(home), 'utf8'), '{ not json');
+});
+
+test('switching away from the mod display and uninstalling take out only our binding', () => {
+  const home = tempHome();
+  const chat = { context: 'Chat', bindings: { 'ctrl+e': 'chat:externalEditor' } };
+  writeKb(home, { bindings: [chat] });
+  install(opts(home));
+  install(opts(home, { display: 'statusline' }));
+  assert.deepEqual(readKb(home).bindings, [chat]);
+  assert.equal(readConfig(home).shortcut, null);
+  install(opts(home, { display: 'mod' }));
+  assert.deepEqual(readKb(home).bindings, [chat, OURS]);
+  const r = uninstall({ home, features: ['context'], now: NOW });
+  assert.equal(r.shortcut?.removed, true);
+  assert.deepEqual(readKb(home).bindings, [chat]);
+  assert.equal(readConfig(home).shortcut, null);
+});
+
+test('installing rm alone leaves keybindings.json alone', () => {
+  const home = tempHome();
+  install(opts(home, { features: ['rm'] }));
+  assert.equal(fs.existsSync(keybindingsPath(home)), false);
 });

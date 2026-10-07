@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readConfig, updateConfig, type Display, type Lang } from '../config.js';
+import type { ShortcutInstall } from '../display/keybindings.js';
+import { SHORTCUT_CHORD } from '../display/shortcut.js';
 import { FEATURES, isFeature, type Feature } from '../features.js';
 import { install, setEnabled, uninstall } from '../install.js';
 import { readJevKey } from '../jev.js';
@@ -109,6 +111,12 @@ async function ensureKey(io: CliIo, keyFileGiven: boolean): Promise<void> {
   await askAndSaveKey(io, io.prompt);
 }
 
+function shortcutLine(s: ShortcutInstall): string {
+  if (s.shortcut) return `shortcut: ${s.shortcut} presses the advice button above the prompt (~/.claude/keybindings.json)`;
+  const why = s.takenBy ? `${SHORTCUT_CHORD} is already bound (${s.takenBy})` : `keybindings.json: ${s.problem}`;
+  return `shortcut: none - ${why}; press the button with a click, or ctrl+x tab then Enter`;
+}
+
 export async function runCli(argv: string[], io: CliIo): Promise<number> {
   const parsed = parse(argv);
   const problem = typeof parsed === 'string' ? parsed : checkOptions(parsed.command, parsed.options);
@@ -136,10 +144,12 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
         if (r.replacedLegacyRmGuard) io.out('replaced the legacy rm-guard hook (its files under ~/.claude/hooks/rm-guard were left in place)');
         if (r.display) io.out(`display: ${r.display}`);
         if (r.backup) io.out(`backup: ${r.backup}`);
+        if (r.shortcut) io.out(shortcutLine(r.shortcut));
+        if (r.shortcut?.backup) io.out(`backup: ${r.shortcut.backup}`);
         if (r.installed.length) {
           io.out(
             r.display === 'mod'
-              ? 'Hooks apply right away, also in open Claude Code sessions; the bottom-row display starts with the next new session.'
+              ? 'Hooks apply right away, also in open Claude Code sessions; the bottom-row display and the advice button start with the next new session.'
               : 'Hooks apply right away, also in open Claude Code sessions.',
           );
         }
@@ -151,6 +161,8 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
         if (!r.removed.length) io.out('nothing to remove');
         for (const f of r.removed) io.out(`removed ${f}`);
         if (r.backup) io.out(`backup: ${r.backup}`);
+        if (r.shortcut?.removed) io.out(`removed the ${SHORTCUT_CHORD} shortcut from keybindings.json`);
+        if (r.shortcut?.backup) io.out(`backup: ${r.shortcut.backup}`);
         if (r.removed.includes('context') && fs.existsSync(savedKeyPath(io.home))) io.out(`kept your saved TypeSafe key at ${savedKeyPath(io.home)}`);
         return 0;
       }

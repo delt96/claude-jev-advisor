@@ -85,3 +85,11 @@ test('a relative --key-file is stored as an absolute path', async () => {
   const r = await cli(['install', 'rm', '--key-file', 'jev-key.env']);
   assert.equal(readConfig(r.home).keyFile, path.resolve('jev-key.env'));
 });
+
+test('install prints the shortcut it bound, and uninstall says it took it out', async () => {
+  const r = await cli(['install', 'context']);
+  assert.equal(r.code, 0);
+  assert.match(r.out, /shortcut: ctrl\+x d presses the advice button/);
+  const u = await cli(['uninstall', 'context'], r.home);
+  assert.match(u.out, /removed the ctrl\+x d shortcut from keybindings\.json/);
+});

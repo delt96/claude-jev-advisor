@@ -6,6 +6,7 @@ import path from 'node:path';
 import { DEFAULT_CONFIG, readConfig, writeConfig } from '../src/config.js';
 import { writeState } from '../src/context/files.js';
 import { install } from '../src/install.js';
+import { keybindingsPath } from '../src/paths.js';
 import { statusLines } from '../src/status.js';
 
 const NOW = new Date(2026, 9, 2, 21, 0, 0);
@@ -59,4 +60,12 @@ test('switched off, context still shows its settings', () => {
   const home = installedHome();
   writeConfig(home, { ...DEFAULT_CONFIG, context: { ...DEFAULT_CONFIG.context, enabled: false } });
   assert.ok(statusLines(home, {}).includes('context: installed, off'));
+});
+
+test('the mod display lists its shortcut, and says when keybindings.json lost it', () => {
+  const home = installedHome();
+  assert.ok(statusLines(home, {}).includes('  shortcut: ctrl+x d'));
+  fs.rmSync(keybindingsPath(home));
+  assert.ok(statusLines(home, {}).includes('  shortcut: ctrl+x d (missing from keybindings.json - run "claude-jev-advisor install context")'));
+  assert.equal(statusLines(installedHome('message'), {}).some((l) => l.startsWith('  shortcut:')), false);
 });

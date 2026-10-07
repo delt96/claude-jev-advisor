@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readConfig, type Config } from './config.js';
+import { shortcutState } from './display/keybindings.js';
 import { adviceLine, formatSize, parseState, type ContextState } from './display/line.js';
 import { PLUGIN_DIRS_ENV, isOurStatusLine } from './display/settings.js';
 import { FEATURES, HOOK_SPECS, LEGACY_RM_GUARD, MOD_DIR_PATTERN, MOD_PLUGIN_NAME, ownScriptPattern } from './features.js';
@@ -39,6 +40,14 @@ function newestState(home: string): ContextState | null {
   }
 }
 
+function shortcutLine(home: string, config: Config): string {
+  if (!config.shortcut) return '  shortcut: none (press the button with a click, or ctrl+x tab then Enter)';
+  const state = shortcutState(home);
+  if (state === 'present') return `  shortcut: ${config.shortcut}`;
+  const why = state === 'unreadable' ? 'keybindings.json cannot be read' : 'missing from keybindings.json';
+  return `  shortcut: ${config.shortcut} (${why} - run "claude-jev-advisor install context")`;
+}
+
 function contextLines(home: string, settings: Settings, config: Config, env: Record<string, string | undefined>): string[] {
   const c = config.context;
   const lines = [
@@ -47,6 +56,7 @@ function contextLines(home: string, settings: Settings, config: Config, env: Rec
     `  thresholds: judge from ${formatSize(c.minTokens)}, /compact from ${formatSize(c.compactMinTokens)}, red at ${c.redRemainingPct}% left`,
     `  Jev: work done from ${c.unitDoneYes}, stage done (/clear) from ${c.phaseDoneYes}`,
   ];
+  if (config.display === 'mod') lines.splice(1, 0, shortcutLine(home, config));
   const last = newestState(home);
   if (last) {
     const line = adviceLine({ size: last.size, threshold: null, judgment: last.judgment, config }) || '(no size)';

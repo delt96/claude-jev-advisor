@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { installShortcut, removeShortcut, type ShortcutInstall } from './display/keybindings.js';
 import { readConfig, updateConfig, type Display, type Lang } from './config.js';
 import { applyStatusLineDisplay, forgetStatusLineBefore, withModDisplay, withoutModDisplay } from './display/settings.js';
 import { HOOK_SPECS, HOOK_TIMEOUT_SECONDS, LEGACY_RM_GUARD, STATUSLINE_SCRIPT, SUPPORTED_PLATFORMS, ownScriptPattern, type Feature } from './features.js';
@@ -25,6 +26,7 @@ export type InstallResult = {
   skipped: { feature: Feature; reason: string }[];
   replacedLegacyRmGuard: boolean;
   display: Display | null;
+  shortcut: ShortcutInstall | null;
 };
 
 function withoutFeature(settings: Settings, feature: Feature): Settings {
@@ -82,18 +84,22 @@ export function install(opts: InstallOptions): InstallResult {
   if (display !== null) next = withDisplay(next, { home: opts.home, distDir: opts.distDir, display, delimiter });
   const backup = same(before, next) ? null : save(opts.home, next, opts.now);
   forgetStatusLineBefore(opts.home, next);
+  let shortcut: ShortcutInstall | null = null;
+  if (display === 'mod') shortcut = installShortcut(opts.home, opts.now);
+  else if (display !== null) removeShortcut(opts.home, opts.now);
   updateConfig(opts.home, (c) => ({
     ...c,
     lang: opts.lang ?? c.lang,
     keyFile: opts.keyFile ?? c.keyFile,
     display: opts.display ?? c.display,
+    shortcut: shortcut ? shortcut.shortcut : display !== null ? null : c.shortcut,
     rm: installed.includes('rm') ? { ...c.rm, enabled: true } : c.rm,
     context: installed.includes('context') ? { ...c.context, enabled: true } : c.context,
   }));
-  return { settingsFile: file, backup, installed, skipped, replacedLegacyRmGuard, display };
+  return { settingsFile: file, backup, installed, skipped, replacedLegacyRmGuard, display, shortcut };
 }
 
-export function uninstall(opts: { home: string; features: Feature[]; now: Date; delimiter?: string }): { settingsFile: string; backup: string | null; removed: Feature[] } {
+export function uninstall(opts: { home: string; features: Feature[]; now: Date; delimiter?: string }): { settingsFile: string; backup: string | null; removed: Feature[]; shortcut: { removed: boolean; backup: string | null } | null } {
   const delimiter = opts.delimiter ?? path.delimiter;
   const file = settingsPath(opts.home);
   const before = readSettingsFile(file);
@@ -107,7 +113,12 @@ export function uninstall(opts: { home: string; features: Feature[]; now: Date; 
   }
   const backup = removed.length ? save(opts.home, next, opts.now) : null;
   forgetStatusLineBefore(opts.home, next);
-  return { settingsFile: file, backup, removed };
+  let shortcut: { removed: boolean; backup: string | null } | null = null;
+  if (opts.features.includes('context')) {
+    shortcut = removeShortcut(opts.home, opts.now);
+    if (readConfig(opts.home).shortcut !== null) updateConfig(opts.home, (c) => ({ ...c, shortcut: null }));
+  }
+  return { settingsFile: file, backup, removed, shortcut };
 }
 
 export function setEnabled(home: string, features: Feature[], enabled: boolean): void {
