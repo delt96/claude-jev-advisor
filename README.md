@@ -17,7 +17,7 @@ Not affiliated with Anthropic or TypeSafe.
 ## Requirements
 
 - Node.js 18 or later
-- Claude Code (the bottom-row display uses Claude Code mods, an early-access feature that may change between releases)
+- Claude Code (the bottom-row display and the advice button use Claude Code mods, an early-access feature that may change between releases)
 - A TypeSafe API key for the `context` helper and for the Jev check of the `rm` helper, in `TYPESAFE_API_KEY` or in a key file (`--key-file`). Without a key, `rm` asks about every real file.
 - Windows for the `rm` helper. On other systems `install` skips it and says why. It reads PowerShell commands with Windows PowerShell, which comes with Windows, or with PowerShell 7 when `pwsh` is on `PATH`, the same one Claude Code uses. It was checked with Windows PowerShell 5.1; PowerShell 7 was not tested.
 
@@ -35,11 +35,11 @@ claude-jev-advisor install
 
 When the context helper is installed and no key is found, `install` asks for your TypeSafe API key. What you type is hidden. It checks the key with one small Jev call and saves it to `~/.claude/claude-jev-advisor/jev-key.env`. Press Enter to skip; `claude-jev-advisor key` asks again later. Instead of typing it, you can set `TYPESAFE_API_KEY`, or pass `--key-file <path>` to a file holding a line `TYPESAFE_API_KEY=...` (then only that path is saved). The key is never printed or logged. On Windows that file is protected by your user folder's permissions only.
 
-Before it changes `~/.claude/settings.json`, `install` copies it to `~/.claude/backups/settings.json.<YYYY-MM-DD-HHmmss>-before-claude-jev-advisor`. If a backup from the same second already exists, it adds `-2`, `-3` and so on instead of overwriting it. It then adds or replaces only this package's entries. Running it again with the same version changes nothing.
+Before it changes `~/.claude/settings.json`, `install` copies it to `~/.claude/backups/settings.json.<YYYY-MM-DD-HHmmss>-before-claude-jev-advisor`. If a backup from the same second already exists, it adds `-2`, `-3` and so on instead of overwriting it. It then adds or replaces only this package's entries. Running it again with the same version changes nothing. With the mod display it also binds `ctrl+x d` in `~/.claude/keybindings.json` (see the context helper below), backing that file up the same way first.
 
 After upgrading from 0.2 or earlier, run `claude-jev-advisor install rm` again so that the rm hook also covers the PowerShell tool. Until you do, `status` shows `Bash only`.
 
-The hooks also reach Claude Code sessions that are already open; the bottom-row display starts with the next new session. Turning a helper on or off applies at once, even to open sessions.
+The hooks also reach Claude Code sessions that are already open; the bottom-row display and the advice button start with the next new session. Turning a helper on or off applies at once, even to open sessions.
 
 ## Commands
 
@@ -48,7 +48,7 @@ The hooks also reach Claude Code sessions that are already open; the bottom-row 
 | `claude-jev-advisor install [rm] [context] [--lang ko\|en] [--key-file <path>] [--display mod\|statusline\|message]` | Registers the hooks (backs up `settings.json` first) and switches the helpers on |
 | `claude-jev-advisor uninstall [rm] [context]` | Removes this package's hooks and display from `settings.json` |
 | `claude-jev-advisor on [rm] [context]` / `off [rm] [context]` | Switches helpers on or off without touching `settings.json` |
-| `claude-jev-advisor status` | Shows what is registered and on, the display, whether a key is set, the thresholds and the last judgment |
+| `claude-jev-advisor status` | Shows what is registered and on, the display, the shortcut, whether a key is set, the thresholds and the last judgment |
 | `claude-jev-advisor report [--days 7]` | Lists the `/compact` and `/clear` advice shown and what followed it, and the deletions Jev let through |
 | `claude-jev-advisor key` | Asks for the TypeSafe API key, checks it and saves it (needs an interactive terminal) |
 | `claude-jev-advisor help` | Prints the usage |
@@ -64,13 +64,22 @@ When a turn ends, a `Stop` hook reads the size of the conversation from the sess
 
 The answer is saved for the display. Nothing is added to what Claude sees, so it costs no Claude tokens. If Jev does not answer within 8 seconds, only the size is shown. While a subagent or a workflow runs in the background, the turn counts as work in progress and Jev is not asked; background shells and monitors do not count.
 
-| Situation | Shown |
-|---|---|
-| Under 250k, or no judgment (no key, Jev unreachable) | `52k` |
-| Work in progress | `🟢 312k` |
-| A whole stage closed (from 250k) | `🟡 312k 새롭게 시작하는 건 어떠세요? /clear` |
-| Work finished, stage goes on (from 250k) | `🟡 312k 지금까지 정리하고 이어가는 건 어떠세요? /compact` |
-| Within 20% of auto-compact | `🔴 790k 18%`, then ` · ` and the `/clear` or `/compact` advice above, or `작업이 끝나면 정리하고 이어가는 건 어떠세요? /compact` while the work is still going |
+With the mod display (the default):
+
+| Situation | Bottom row | Above the prompt |
+|---|---|---|
+| Under 250k, or no judgment (no key, Jev unreachable) | `52k +12k` | |
+| Work in progress | `🟢 312k +38k` | |
+| A whole stage closed (from 250k) | `312k +38k` | `🟡 새롭게 시작하는 건 어떠세요?` and a `/clear` button |
+| Work finished, stage goes on (from 250k) | `312k +38k` | `🟡 지금까지 정리하고 이어가는 건 어떠세요?` and a `/compact` button |
+| Within 20% of auto-compact, with one of the two above | `790k +38k` | `🔴 18%`, the advice and its button |
+| Within 20% of auto-compact otherwise | `🔴 790k +38k 18%`, then ` · 작업이 끝나면 정리하고 이어가는 건 어떠세요? /compact` while the work is still going | |
+
+`+38k` is how much the conversation grew in the last request, counted from when it was sent. It is left out when the conversation did not grow, for example after a `/compact`. The `statusline` and `message` displays show the whole advice on one line instead, without the increase: `🟡 312k 새롭게 시작하는 건 어떠세요? /clear` and so on.
+
+The button runs `/compact` or `/clear` at once; a `/clear` can be undone with `/resume`. Click it, press `ctrl+x d`, or press `ctrl+x tab` and then Enter. It is not drawn while a request runs or while Claude Code waits for your answer to a question, and once pressed it stays away until Jev judges a newer reply. A refused `/compact` (too few messages, for example) shows the reason in a toast.
+
+`install` writes the shortcut to `~/.claude/keybindings.json` as `"ctrl+x d": "diff:back"` in the `DiffDialog` block. Claude Code lets a mod's button take the key of one of its own actions while that action is not in use; `diff:back` has no key of its own and works only inside the diff dialog, where `ctrl+x d` keeps doing that. If `ctrl+x d` is already bound in your file, or the file cannot be read, `install` leaves the file alone and says so, and the button is pressed with a click or `ctrl+x tab`. Press `d` without `ctrl`: `ctrl+d` is Claude Code's exit key. `uninstall context` and switching to another display take the line out again if it is still ours.
 
 With `--lang en` the advice reads `Start fresh? /clear`, `Wrap up what you have and continue? /compact` and `When this work is done, wrap up and continue? /compact`.
 
@@ -78,7 +87,7 @@ Judging starts at 250k because a conversation passes 100k after a request or two
 
 | `--display` | Where |
 |---|---|
-| `mod` (default) | At the end of the bottom row, after `⏵⏵ … mode on`. A small Claude Code mod in the package's `mod/` folder draws it. The mod is listed in `env.CLAUDE_CODE_PLUGIN_DIRS` and told the data folder through `pluginConfigs`. |
+| `mod` (default) | At the end of the bottom row, after `⏵⏵ … mode on`, and advice that can be acted on in a band above the prompt with a button. A small Claude Code mod in the package's `mod/` folder draws both. The mod is listed in `env.CLAUDE_CODE_PLUGIN_DIRS` and told the data folder through `pluginConfigs`. |
 | `statusline` | Claude Code's status line, the row above the bottom row. An existing status line of yours keeps running first, with our text after it, and is put back when you switch away or uninstall. On Windows that command runs in Git Bash when it is installed and in PowerShell otherwise, as Claude Code runs it; it gets 2 seconds. No red zone, because the auto-compact threshold is not known there. |
 | `message` | A `Stop says: …` line in the transcript when there is advice. Claude does not see it. No red zone. |
 
@@ -169,6 +178,8 @@ A key saved by `install` or `key` stays in `~/.claude/claude-jev-advisor/jev-key
 | `~/.claude/claude-jev-advisor/statusline-before.json` | Your own status line while `--display statusline` is in use |
 | `~/.claude/claude-jev-advisor/jev-key.env` | Your TypeSafe API key, when you typed it in `install` or `key` |
 | `~/.claude/backups/settings.json.*-before-claude-jev-advisor` | Copies of `settings.json` from before each change |
+| `~/.claude/keybindings.json` | The `ctrl+x d` line, with the `mod` display |
+| `~/.claude/backups/keybindings.json.*-before-claude-jev-advisor` | Copies of `keybindings.json` from before each change |
 
 Defaults:
 
@@ -177,12 +188,13 @@ Defaults:
   "lang": "ko",
   "keyFile": null,
   "display": "mod",
+  "shortcut": null,
   "context": { "enabled": true, "minTokens": 250000, "compactMinTokens": 250000, "redRemainingPct": 20, "unitDoneYes": 0.6, "phaseDoneYes": 0.6 },
   "rm": { "enabled": true, "jev": true, "throwawayYes": 0.8, "maxDirFiles": 50 }
 }
 ```
 
-`minTokens` is where judging starts, `compactMinTokens` where `/compact` is suggested, `redRemainingPct` where the red zone starts, and `unitDoneYes` / `phaseDoneYes` are the Jev probabilities needed for "work finished" (`/compact`) and "stage closed" (`/clear`). For `rm`, `jev` switches the Jev check, `throwawayYes` is the probability needed to lift an ask, and `maxDirFiles` the most files a folder of this session may hold.
+`minTokens` is where judging starts, `compactMinTokens` where `/compact` is suggested, `redRemainingPct` where the red zone starts, and `unitDoneYes` / `phaseDoneYes` are the Jev probabilities needed for "work finished" (`/compact`) and "stage closed" (`/clear`). For `rm`, `jev` switches the Jev check, `throwawayYes` is the probability needed to lift an ask, and `maxDirFiles` the most files a folder of this session may hold. `shortcut` is set by `install`: the key it bound, or `null` when it bound none.
 
 `config.json` keeps only the values you changed, with `"version": 2`. A config written by 0.1.x, which saved every value, has its old default thresholds (`minTokens` 100000, `compactMinTokens` 200000, `unitDoneYes` 0.7) read as unset, so the new defaults apply.
 

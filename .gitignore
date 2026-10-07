@@ -1,5 +1,6 @@
 node_modules/
 dist/
 mod/hooks/register.js
+mod/.claude-plugin/types/
 *.tsbuildinfo
 *.tgz

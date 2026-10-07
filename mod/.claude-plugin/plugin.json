@@ -1,7 +1,7 @@
 {
   "name": "jev-advisor",
-  "version": "0.3.0",
-  "description": "Bottom-row compact/clear advice from @delt/claude-jev-advisor (unofficial)",
+  "version": "0.4.0",
+  "description": "Bottom-row compact/clear advice and an advice button from @delt/claude-jev-advisor (unofficial)",
   "author": { "name": "delt96" },
   "userConfig": {
     "dataDir": {
