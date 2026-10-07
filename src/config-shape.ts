@@ -9,7 +9,7 @@ export type ContextConfig = {
   phaseDoneYes: number;
 };
 export type RmConfig = { enabled: boolean; jev: boolean; throwawayYes: number; maxDirFiles: number };
-export type Config = { lang: Lang; keyFile: string | null; display: Display; context: ContextConfig; rm: RmConfig };
+export type Config = { lang: Lang; keyFile: string | null; display: Display; shortcut: string | null; context: ContextConfig; rm: RmConfig };
 
 export const CONFIG_VERSION = 2;
 
@@ -17,6 +17,7 @@ export const DEFAULT_CONFIG: Config = {
   lang: 'ko',
   keyFile: null,
   display: 'mod',
+  shortcut: null,
   context: { enabled: true, minTokens: 250000, compactMinTokens: 250000, redRemainingPct: 20, unitDoneYes: 0.6, phaseDoneYes: 0.6 },
   rm: { enabled: true, jev: true, throwawayYes: 0.8, maxDirFiles: 50 },
 };
@@ -52,6 +53,7 @@ export function normalizeConfig(raw: unknown): Config {
     lang: typeof r.lang === 'string' && LANGS.includes(r.lang) ? (r.lang as Lang) : DEFAULT_CONFIG.lang,
     keyFile: typeof r.keyFile === 'string' && r.keyFile !== '' ? r.keyFile : null,
     display: typeof r.display === 'string' && DISPLAYS.includes(r.display) ? (r.display as Display) : DEFAULT_CONFIG.display,
+    shortcut: typeof r.shortcut === 'string' && r.shortcut !== '' ? r.shortcut : null,
     context: mergeSection(DEFAULT_CONFIG.context, r.version === CONFIG_VERSION ? r.context : withoutLegacyDefaults(r.context)),
     rm: mergeSection(DEFAULT_CONFIG.rm, r.rm),
   };

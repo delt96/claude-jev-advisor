@@ -130,8 +130,8 @@ test('adviceQuestion is the advice without its command, in the configured langua
   assert.equal(adviceQuestion('compact', 'en'), 'Wrap up what you have and continue?');
 });
 
-test('the display code and the config shape import nothing from Node, so the mod bundle can use them', () => {
-  for (const file of ['src/display/line.ts', 'src/config-shape.ts']) {
+test('the code the mod bundle uses imports nothing from Node', () => {
+  for (const file of ['src/display/line.ts', 'src/config-shape.ts', 'src/display/shortcut.ts', 'src/mod/band.ts']) {
     assert.doesNotMatch(fs.readFileSync(path.join(REPO, file), 'utf8'), /from ['"]node:|require\(/);
   }
 });

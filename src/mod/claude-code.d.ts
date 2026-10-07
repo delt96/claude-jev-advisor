@@ -18,3 +18,5 @@ declare module 'claude-code' {
   };
   export type Register = (on: On, options: Readonly<Record<string, unknown>>) => void;
 }
+
+declare function h(type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): unknown;

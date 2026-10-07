@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DEFAULT_CONFIG, readConfig, updateConfig, writeConfig, type Config } from '../src/config.js';
+import { DEFAULT_CONFIG, configToSave, normalizeConfig, readConfig, updateConfig, writeConfig, type Config } from '../src/config.js';
 import { configPath, dataDir, settingsPath } from '../src/paths.js';
 
 const tempHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cja-home-'));
@@ -29,6 +29,7 @@ test('the defaults match the spec', () => {
     lang: 'ko',
     keyFile: null,
     display: 'mod',
+    shortcut: null,
     context: { enabled: true, minTokens: 250000, compactMinTokens: 250000, redRemainingPct: 20, unitDoneYes: 0.6, phaseDoneYes: 0.6 },
     rm: { enabled: true, jev: true, throwawayYes: 0.8, maxDirFiles: 50 },
   });
@@ -95,4 +96,13 @@ test('a version 2 config keeps a value even when it equals an old default', () =
   const home = tempHome();
   writeRaw(home, JSON.stringify({ version: 2, context: { unitDoneYes: 0.7, minTokens: 100000 } }));
   assert.deepEqual(readConfig(home).context, { ...DEFAULT_CONFIG.context, unitDoneYes: 0.7, minTokens: 100000 });
+});
+
+test('the shortcut install recorded is read back, an empty or wrong value reads as none, and none is not saved', () => {
+  assert.equal(normalizeConfig({ shortcut: 'ctrl+x d' }).shortcut, 'ctrl+x d');
+  assert.equal(normalizeConfig({ shortcut: '' }).shortcut, null);
+  assert.equal(normalizeConfig({ shortcut: 3 }).shortcut, null);
+  assert.equal(normalizeConfig({}).shortcut, null);
+  assert.equal('shortcut' in configToSave(DEFAULT_CONFIG), false);
+  assert.equal(configToSave({ ...DEFAULT_CONFIG, shortcut: 'ctrl+x d' }).shortcut, 'ctrl+x d');
 });
