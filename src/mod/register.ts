@@ -52,6 +52,7 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
   let state: ContextState | null = null;
   let threshold: number | null = null;
   let turnStartedAt = 0;
+  let baseline: number | null = null;
   let seen = '';
 
   // A failing mod must never swallow Claude Code's events or blank its row: every hook calls next(e) outside its try.
@@ -78,8 +79,10 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
   });
 
   on('turn.start', async ($, e, next) => {
+    baseline = null;
     try {
       turnStartedAt = await $.clock.now();
+      baseline = await liveSize($);
       $.ui.invalidate('ui.render');
     } catch {}
     return next(e);
@@ -91,13 +94,25 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
     return result;
   });
 
+  // After /clear the engine raises no session.start, so the old session's values are dropped here.
+  on('session.end', async ($, e, next) => {
+    baseline = null;
+    state = null;
+    seen = '';
+    try {
+      $.ui.invalidate('ui.render');
+    } catch {}
+    return next(e);
+  });
+
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     let tail = '';
     try {
       const current = config;
       if (current && current.context.enabled && current.display === 'mod') {
         const size = await liveSize($);
-        tail = adviceLine({ size, threshold, judgment: usableJudgment(state, size, turnStartedAt), config: current });
+        const increase = baseline !== null && size !== null ? size - baseline : null;
+        tail = adviceLine({ size, threshold, judgment: usableJudgment(state, size, turnStartedAt), config: current, increase });
       }
     } catch {
       tail = '';

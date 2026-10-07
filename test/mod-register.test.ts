@@ -71,6 +71,7 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
       await tick();
     },
     turnStart: async () => hooks.get('turn.start')?.hook($, {}, async () => 'engine'),
+    end: async () => hooks.get('session.end')?.hook($, { reason: 'clear', sessionId: 'sess-1' }, async () => 'engine'),
     tail: async (): Promise<string | undefined> => {
       const e = { props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } };
       const out = await hooks.get('ui.render')?.hook($, e, async (next: typeof e) => next);
@@ -101,7 +102,43 @@ test('a new request hides the old judgment until a newer one is saved', async ()
   files[STATE_FILE] = state(6000, 330000, { phase: 'working', clear: false });
   h.live.tokens = 330000;
   await h.tick();
-  assert.equal(await h.tail(), '🟢 330k');
+  assert.equal(await h.tail(), '🟢 330k +18k');
+});
+
+test('the tail adds what the current request has added, and keeps it until the next request', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG }, tokens: 300000, threshold: 967000 });
+  await h.start();
+  assert.equal(await h.tail(), '300k');
+  await h.turnStart();
+  assert.equal(await h.tail(), '300k');
+  h.live.tokens = 338000;
+  await h.tick();
+  assert.equal(await h.tail(), '338k +38k');
+});
+
+test('an increase under half a k, or a shrink after /compact, is not shown', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG }, tokens: 300000, threshold: 967000 });
+  await h.start();
+  await h.turnStart();
+  h.live.tokens = 300400;
+  assert.equal(await h.tail(), '300k');
+  h.live.tokens = 120000;
+  assert.equal(await h.tail(), '120k');
+});
+
+test('the end of a session, as /clear ends it, drops the increase and the judgment before the poller runs again', async () => {
+  const files: Record<string, unknown> = { [CONFIG_FILE]: DEFAULT_CONFIG };
+  const h = harness({ files, tokens: 300000, threshold: 967000 });
+  await h.start();
+  await h.turnStart();
+  files[STATE_FILE] = state(2000, 330000, { phase: 'working', clear: false });
+  h.live.tokens = 330000;
+  await h.tick();
+  assert.equal(await h.tail(), '🟢 330k +30k');
+  const before = h.invalidations();
+  assert.equal(await h.end(), 'engine');
+  assert.equal(h.invalidations(), before + 1);
+  assert.equal(await h.tail(), '330k');
 });
 
 test('a redraw is asked for only when the config or the state changed', async () => {
