@@ -1,6 +1,7 @@
 import type { Engine, On } from 'claude-code';
 import { normalizeConfig, type Config } from '../config-shape.js';
-import { adviceLine, parseState, usableJudgment, type ContextState } from '../display/line.js';
+import { bandAdvice, modTail, parseState, usableJudgment, type AdviceKind, type ContextState, type Judgment } from '../display/line.js';
+import { drawBand } from './band.js';
 
 const REFRESH_MS = 2000;
 
@@ -46,6 +47,26 @@ async function liveSize($: Engine): Promise<number | null> {
   }
 }
 
+function reason(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function press($: Engine, kind: AdviceKind): Promise<void> {
+  try {
+    $.ui.invalidate('ui.render');
+    if (kind === 'compact') {
+      const result = await $.session.compact();
+      if (result?.skip) $.ui.toast('/compact: skipped by a hook');
+    } else {
+      await $.command.run({ command: 'clear' });
+    }
+  } catch (err) {
+    try {
+      $.ui.toast(`/${kind}: ${reason(err)}`);
+    } catch {}
+  }
+}
+
 export function register(on: On, options: Readonly<Record<string, unknown>>): void {
   const dataDir = typeof options.dataDir === 'string' ? options.dataDir.replace(/[\\/]+$/, '') : '';
   let config: Config | null = null;
@@ -54,6 +75,9 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
   let turnStartedAt = 0;
   let baseline: number | null = null;
   let seen = '';
+  let handledAt = -Infinity;
+
+  const judgmentFor = (size: number | null): Judgment | null => (state && state.at <= handledAt ? null : usableJudgment(state, size, turnStartedAt));
 
   // A failing mod must never swallow Claude Code's events or blank its row: every hook calls next(e) outside its try.
   on('session.start', async ($, e, next) => {
@@ -112,11 +136,30 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
       if (current && current.context.enabled && current.display === 'mod') {
         const size = await liveSize($);
         const increase = baseline !== null && size !== null ? size - baseline : null;
-        tail = adviceLine({ size, threshold, judgment: usableJudgment(state, size, turnStartedAt), config: current, increase });
+        tail = modTail({ size, threshold, judgment: judgmentFor(size), config: current, increase });
       }
     } catch {
       tail = '';
     }
     return tail ? next({ ...e, props: { ...e.props, tail } }) : next(e);
+  });
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    let band: unknown = null;
+    try {
+      const current = config;
+      const props = e.props ?? {};
+      if (current && current.context.enabled && current.display === 'mod' && props.isWorking !== true && props.hasSurvey !== true) {
+        const size = await liveSize($);
+        const advice = bandAdvice({ size, threshold, judgment: judgmentFor(size), config: current });
+        if (advice) band = drawBand($.ui.resolve(e), { advice, config: current, onPress: () => {
+          handledAt = state?.at ?? handledAt;
+          void press($, advice.kind);
+        } });
+      }
+    } catch {
+      band = null;
+    }
+    return band ?? next(e);
   });
 }

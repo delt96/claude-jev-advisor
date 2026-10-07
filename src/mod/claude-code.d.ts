@@ -4,10 +4,16 @@ declare module 'claude-code' {
     session: {
       id(): Promise<string>;
       usage(args?: { breakdown?: 'summary' | 'full' }): Promise<{ context: { tokens?: number; window: number; breakdown?: { autoCompactThreshold?: number } } }>;
+      compact(): Promise<{ skip?: unknown } | undefined>;
     };
+    command: { run(args: { command: string }): Promise<unknown> };
     fs: { read(path: string): Promise<unknown> };
     clock: { now(): Promise<number>; every(ms: number, fn: () => void): unknown };
-    ui: { invalidate(event: 'ui.render'): void };
+    ui: {
+      invalidate(event: 'ui.render'): void;
+      toast(text: string): void;
+      resolve(e: HookEvent): { Box: unknown; Text: unknown; Button: unknown };
+    };
   };
   export type HookEvent = { props?: Record<string, unknown>; [key: string]: unknown };
   export type Next = (e: HookEvent) => Promise<unknown>;

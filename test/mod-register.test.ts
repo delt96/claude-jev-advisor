@@ -4,7 +4,24 @@ import { DEFAULT_CONFIG, type Config } from '../src/config.js';
 import { register } from '../src/mod/register.js';
 
 type AnyFn = (...args: any[]) => any;
-type Fail = { usage?: boolean; now?: boolean; read?: 'throw' | 'object' };
+type Fail = { usage?: boolean; now?: boolean; read?: 'throw' | 'object'; compact?: string };
+type Node = { type: unknown; props: Record<string, unknown>; children: unknown[] };
+
+Object.assign(globalThis, {
+  h: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): Node => ({ type, props: props ?? {}, children: children.flat() }),
+});
+
+function buttonOf(tree: unknown): Node | undefined {
+  if (typeof tree !== 'object' || tree === null) return undefined;
+  const node = tree as Node;
+  if (node.type === 'Button') return node;
+  for (const child of node.children) {
+    const found = buttonOf(child);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 const CONFIG_FILE = 'D:/data/config.json';
 const STATE_FILE = 'D:/data/state/sess-1.json';
 const state = (at: number, size: number, judgment: object | null) => ({ sessionId: 'sess-1', at, size, judgment });
@@ -12,19 +29,36 @@ const state = (at: number, size: number, judgment: object | null) => ({ sessionI
 function harness(opts: { dataDir?: string; files: Record<string, unknown>; tokens?: number; threshold?: number; fail?: Fail }) {
   const hooks = new Map<string, { matcher: unknown; hook: AnyFn }>();
   const on = (event: string, a: unknown, b?: unknown) => {
-    hooks.set(event, b === undefined ? { matcher: null, hook: a as AnyFn } : { matcher: a, hook: b as AnyFn });
+    const matcher = b === undefined ? null : a;
+    const component = (matcher as { component?: string } | null)?.component;
+    hooks.set(component ? `${event}:${component}` : event, { matcher, hook: (b ?? a) as AnyFn });
   };
   let timer = null as (() => void) | null;
   let now = 1000;
   let invalidations = 0;
   const live = { tokens: opts.tokens };
   const fail: Fail = opts.fail ?? {};
+  const toasts: string[] = [];
+  const calls = { compact: 0, run: [] as unknown[] };
+
   const $ = {
     session: {
+      compact: async () => {
+        calls.compact += 1;
+        if (fail.compact) throw new Error(fail.compact);
+        return {};
+      },
+
       id: async () => 'sess-1',
       usage: async (args?: { breakdown?: string }) => {
         if (fail.usage) throw new Error('usage failed');
         return { context: { tokens: live.tokens, window: 1000000, ...(args?.breakdown ? { breakdown: { autoCompactThreshold: opts.threshold } } : {}) } };
+      },
+    },
+    command: {
+      run: async (args: unknown) => {
+        calls.run.push(args);
+        return { text: '' };
       },
     },
     fs: {
@@ -49,6 +83,10 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
       invalidate: () => {
         invalidations += 1;
       },
+      toast: (text: string) => {
+        toasts.push(text);
+      },
+      resolve: () => ({ Box: 'Box', Text: 'Text', Button: 'Button' }),
     },
   };
   register(on as never, { dataDir: opts.dataDir ?? 'D:/data' });
@@ -60,6 +98,8 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
   };
   return {
     live,
+    toasts,
+    calls,
     tick,
     hooks,
     invalidations: () => invalidations,
@@ -72,9 +112,18 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
     },
     turnStart: async () => hooks.get('turn.start')?.hook($, {}, async () => 'engine'),
     end: async () => hooks.get('session.end')?.hook($, { reason: 'clear', sessionId: 'sess-1' }, async () => 'engine'),
+    band: async (props: Record<string, unknown> = {}) => {
+      const e = { props: { hasSurvey: false, isWorking: false, maxRows: 20, ...props } };
+      return hooks.get('ui.render:AbovePrompt')?.hook($, e, async () => 'engine');
+    },
+    press: async (tree: unknown) => {
+      (buttonOf(tree)?.props.onPress as () => void)();
+      await settle();
+      await settle();
+    },
     tail: async (): Promise<string | undefined> => {
       const e = { props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } };
-      const out = await hooks.get('ui.render')?.hook($, e, async (next: typeof e) => next);
+      const out = await hooks.get('ui.render:PromptHint')?.hook($, e, async (next: typeof e) => next);
       return (out as { props: { tail?: string } }).props.tail;
     },
   };
@@ -82,23 +131,26 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
 
 test('the render hook targets the PromptHint row', () => {
   const h = harness({ files: {} });
-  assert.deepEqual(h.hooks.get('ui.render')?.matcher, { component: 'PromptHint' });
+  assert.deepEqual(h.hooks.get('ui.render:PromptHint')?.matcher, { component: 'PromptHint' });
 });
 
-test('the tail shows the saved judgment for this session', async () => {
+test('the saved judgment for this session shows as a band, and the tail keeps the size', async () => {
   const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: state(900, 312000, { phase: 'unit_done', clear: true }) }, tokens: 312000, threshold: 967000 });
   await h.start();
-  assert.equal(await h.tail(), '🟡 312k 새롭게 시작하는 건 어떠세요? /clear');
+  assert.equal(await h.tail(), '312k');
+  assert.ok(String(buttonOf(await h.band())?.props.label).includes('/clear'));
 });
 
 test('a new request hides the old judgment until a newer one is saved', async () => {
   const files: Record<string, unknown> = { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: state(900, 312000, { phase: 'unit_done', clear: false }) };
   const h = harness({ files, tokens: 312000, threshold: 967000 });
   await h.start();
-  assert.equal(await h.tail(), '🟡 312k 지금까지 정리하고 이어가는 건 어떠세요? /compact');
+  assert.equal(await h.tail(), '312k');
+  assert.ok(String(buttonOf(await h.band())?.props.label).includes('/compact'));
   h.setNow(5000);
   assert.equal(await h.turnStart(), 'engine');
   assert.equal(await h.tail(), '312k');
+  assert.equal(await h.band(), 'engine');
   files[STATE_FILE] = state(6000, 330000, { phase: 'working', clear: false });
   h.live.tokens = 330000;
   await h.tick();
@@ -221,4 +273,75 @@ test('a headless session starts no poller and draws nothing', async () => {
   await h.start({ isInteractive: false });
   assert.equal(h.invalidations(), 0);
   assert.equal(await h.tail(), undefined);
+  assert.equal(await h.band(), 'engine');
+});
+
+const COMPACT_STATE = state(900, 312000, { phase: 'unit_done', clear: false });
+const CLEAR_STATE = state(900, 312000, { phase: 'unit_done', clear: true });
+
+test('the band hook targets the row above the prompt', () => {
+  const h = harness({ files: {} });
+  assert.deepEqual(h.hooks.get('ui.render:AbovePrompt')?.matcher, { component: 'AbovePrompt' });
+});
+
+test('no band while a turn runs, a survey is up, the work goes on, or another display or a switched-off helper is set', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: CLEAR_STATE }, tokens: 312000, threshold: 967000 });
+  await h.start();
+  assert.equal(await h.band({ isWorking: true }), 'engine');
+  assert.equal(await h.band({ hasSurvey: true }), 'engine');
+  const working = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: state(900, 312000, { phase: 'working', clear: false }) }, tokens: 312000, threshold: 967000 });
+  await working.start();
+  assert.equal(await working.band(), 'engine');
+  const others: Config[] = [{ ...DEFAULT_CONFIG, display: 'statusline' }, { ...DEFAULT_CONFIG, context: { ...DEFAULT_CONFIG.context, enabled: false } }];
+  for (const config of others) {
+    const other = harness({ files: { [CONFIG_FILE]: config, [STATE_FILE]: CLEAR_STATE }, tokens: 312000, threshold: 967000 });
+    await other.start();
+    assert.equal(await other.band(), 'engine');
+  }
+});
+
+test('pressing compact compacts, and the band stays away for that judgment even when the poller reads it again', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: COMPACT_STATE }, tokens: 312000, threshold: 967000 });
+  await h.start();
+  await h.press(await h.band());
+  assert.equal(h.calls.compact, 1);
+  assert.equal(await h.band(), 'engine');
+  h.live.tokens = 260000;
+  await h.tick();
+  assert.equal(await h.band(), 'engine');
+  assert.equal(await h.tail(), '260k');
+});
+
+test('pressing clear runs /clear', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: CLEAR_STATE }, tokens: 312000, threshold: 967000 });
+  await h.start();
+  await h.press(await h.band());
+  assert.deepEqual(h.calls.run, [{ command: 'clear' }]);
+});
+
+test('a refused compact is shown as a toast and its button does not come back', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: COMPACT_STATE }, tokens: 312000, threshold: 967000, fail: { compact: 'Not enough messages to compact.' } });
+  await h.start();
+  await h.press(await h.band());
+  assert.deepEqual(h.toasts, ['/compact: Not enough messages to compact.']);
+  assert.equal(await h.band(), 'engine');
+});
+
+test('a newer judgment brings the band back after one was acted on', async () => {
+  const files: Record<string, unknown> = { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: COMPACT_STATE };
+  const h = harness({ files, tokens: 312000, threshold: 967000 });
+  await h.start();
+  await h.press(await h.band());
+  files[STATE_FILE] = state(1500, 320000, { phase: 'unit_done', clear: true });
+  h.live.tokens = 320000;
+  await h.tick();
+  assert.ok(String(buttonOf(await h.band())?.props.label).includes('/clear'));
+});
+
+test('after the session ends the band is gone before the poller runs again', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: CLEAR_STATE }, tokens: 312000, threshold: 967000 });
+  await h.start();
+  assert.notEqual(await h.band(), 'engine');
+  await h.end();
+  assert.equal(await h.band(), 'engine');
 });
