@@ -22,6 +22,13 @@ function buttonOf(tree: unknown): Node | undefined {
   return undefined;
 }
 
+function textOf(tree: unknown): string {
+  if (typeof tree === 'string' || typeof tree === 'number') return String(tree);
+  if (typeof tree !== 'object' || tree === null) return '';
+  const node = tree as Node;
+  return node.children.map(textOf).join(' ');
+}
+
 const CONFIG_FILE = 'D:/data/config.json';
 const STATE_FILE = 'D:/data/state/sess-1.json';
 const state = (at: number, size: number, judgment: object | null) => ({ sessionId: 'sess-1', at, size, judgment });
@@ -139,6 +146,18 @@ test('the saved judgment for this session shows as a band, and the tail keeps th
   await h.start();
   assert.equal(await h.tail(), '312k');
   assert.ok(String(buttonOf(await h.band())?.props.label).includes('/clear'));
+});
+
+test('the band shows the live size and what the current request added, as the tail does', async () => {
+  const files: Record<string, unknown> = { [CONFIG_FILE]: DEFAULT_CONFIG };
+  const h = harness({ files, tokens: 300000, threshold: 967000 });
+  await h.start();
+  await h.turnStart();
+  files[STATE_FILE] = state(2000, 338000, { phase: 'unit_done', clear: true });
+  h.live.tokens = 338000;
+  await h.tick();
+  assert.ok(textOf(await h.band()).includes('🟡 338k +38k'));
+  assert.equal(await h.tail(), '338k +38k');
 });
 
 test('a new request hides the old judgment until a newer one is saved', async () => {

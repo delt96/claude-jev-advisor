@@ -1,15 +1,16 @@
 import type { Config } from '../config-shape.js';
-import { adviceQuestion, type AdviceKind, type BandAdvice } from '../display/line.js';
+import { adviceQuestion, formatSize, increaseSuffix, type AdviceKind, type BandAdvice } from '../display/line.js';
 import { SHORTCUT_ACTION } from '../display/shortcut.js';
 
 export type BandElements = { Box: unknown; Text: unknown; Button: unknown };
-export type BandInput = { advice: BandAdvice; config: Config; onPress: () => void };
+export type BandInput = { advice: BandAdvice; config: Config; onPress: () => void; size: number; increase: number | null };
 
 const ICONS: Record<AdviceKind, string> = { compact: '📦', clear: '🧹' };
 
-export function drawBand(ui: BandElements, { advice, config, onPress }: BandInput): unknown {
+export function drawBand(ui: BandElements, { advice, config, onPress, size, increase }: BandInput): unknown {
   const { Box, Text, Button } = ui;
-  const head = advice.remainingPct === null ? '🟡' : `🔴 ${advice.remainingPct}%`;
+  const k = `${formatSize(size)}${increaseSuffix(increase)}`;
+  const head = advice.remainingPct === null ? `🟡 ${k}` : `🔴 ${k} ${advice.remainingPct}%`;
   const controls: unknown[] = [
     h(Button, {
       key: `jev-${advice.kind}`,

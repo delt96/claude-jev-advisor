@@ -78,6 +78,7 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
   let seen = '';
   let handledAt = -Infinity;
 
+  const increaseTo = (size: number | null): number | null => (baseline !== null && size !== null ? size - baseline : null);
   const judgmentFor = (size: number | null): Judgment | null => (state && state.at <= handledAt ? null : usableJudgment(state, size, turnStartedAt));
 
   // A failing mod must never swallow Claude Code's events or blank its row: every hook calls next(e) outside its try.
@@ -136,8 +137,7 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
       const current = config;
       if (current && current.context.enabled && current.display === 'mod') {
         const size = await liveSize($);
-        const increase = baseline !== null && size !== null ? size - baseline : null;
-        tail = modTail({ size, threshold, judgment: judgmentFor(size), config: current, increase });
+        tail = modTail({ size, threshold, judgment: judgmentFor(size), config: current, increase: increaseTo(size) });
       }
     } catch {
       tail = '';
@@ -154,7 +154,7 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
         const size = await liveSize($);
         const advice = bandAdvice({ size, threshold, judgment: judgmentFor(size), config: current });
         const at = state?.at;
-        if (advice && at !== undefined) band = drawBand($.ui.resolve(e), { advice, config: current, onPress: () => {
+        if (advice && at !== undefined && size !== null) band = drawBand($.ui.resolve(e), { advice, config: current, size, increase: increaseTo(size), onPress: () => {
           if (at <= handledAt) return;
           handledAt = at;
           void press($, advice.kind);

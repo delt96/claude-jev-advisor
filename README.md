@@ -72,12 +72,12 @@ With the mod display (the default):
 |---|---|---|
 | Under 250k, or no judgment (no key, Jev unreachable) | `52k +12k` | |
 | Work in progress | `🟢 312k +38k` | |
-| A whole stage closed (from 250k) | `312k +38k` | `🟡 새롭게 시작하는 건 어떠세요?` and a `/clear` button |
-| Work finished, stage goes on (from 250k) | `312k +38k` | `🟡 지금까지 정리하고 이어가는 건 어떠세요?` and a `/compact` button |
-| Within 20% of auto-compact, with one of the two above | `790k +38k` | `🔴 18%`, the advice and its button |
+| A whole stage closed (from 250k) | `312k +38k` | `🟡 312k +38k 새롭게 시작하는 건 어떠세요?` and a `/clear` button |
+| Work finished, stage goes on (from 250k) | `312k +38k` | `🟡 312k +38k 지금까지 정리하고 이어가는 건 어떠세요?` and a `/compact` button |
+| Within 20% of auto-compact, with one of the two above | `790k +38k` | `🔴 790k +38k 18%`, the advice and its button |
 | Within 20% of auto-compact otherwise | `🔴 790k +38k 18%`, then ` · 작업이 끝나면 정리하고 이어가는 건 어떠세요? /compact` while the work is still going | |
 
-`+38k` is how much the conversation grew in the last request, counted from when it was sent. It is left out when the conversation did not grow, for example after a `/compact`. The `statusline` and `message` displays show the whole advice on one line instead, without the increase: `🟡 312k 새롭게 시작하는 건 어떠세요? /clear` and so on.
+`+38k` is how much the conversation grew in the last request, counted from when it was sent. It is left out when the conversation did not grow, for example after a `/compact`. The band repeats the size so you need not look down for it while it is up; the bottom row keeps it too, so it never moves. The `statusline` and `message` displays show the whole advice on one line instead, without the increase: `🟡 312k 새롭게 시작하는 건 어떠세요? /clear` and so on.
 
 The button runs `/compact` or `/clear` at once; a `/clear` can be undone with `/resume`. Click it, press `ctrl+x ctrl+f`, or press `ctrl+x tab` and then Enter. It is not drawn while a request runs or while Claude Code waits for your answer to a question, and once pressed it stays away until Jev judges a newer reply. A refused `/compact` (too few messages, for example) shows the reason in a toast.
 

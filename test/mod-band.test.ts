@@ -27,7 +27,8 @@ function words(tree: unknown): string {
   return label + node.children.map(words).join('');
 }
 
-const draw = (advice: BandAdvice, config: Config = DEFAULT_CONFIG, onPress = () => {}) => drawBand(UI, { advice, config, onPress });
+const draw = (advice: BandAdvice, config: Config = DEFAULT_CONFIG, onPress = () => {}, size = 312000, increase: number | null = null) =>
+  drawBand(UI, { advice, config, onPress, size, increase });
 const buttons = (tree: unknown) => nodes(tree).filter((n) => n.type === 'Button');
 
 test('the band holds the advice question and one button for the advised command', () => {
@@ -50,6 +51,20 @@ test('compact and clear bands differ by more than the question and the command, 
 test('the red zone shows the percent left', () => {
   assert.ok(words(draw({ kind: 'compact', remainingPct: 18 })).includes('18%'));
   assert.equal(words(draw({ kind: 'compact', remainingPct: null })).includes('%'), false);
+});
+
+const head = (tree: unknown) => nodes(tree).find((node) => node.type === 'Text' && /^(🟡|🔴)/.test(words(node)));
+
+test('the band leads with the conversation size and what the current request added', () => {
+  assert.equal(words(head(draw({ kind: 'clear', remainingPct: null }, DEFAULT_CONFIG, () => {}, 312000, 38000))), '🟡 312k +38k');
+  assert.equal(words(head(draw({ kind: 'compact', remainingPct: 18 }, DEFAULT_CONFIG, () => {}, 790000, 38000))), '🔴 790k +38k 18%');
+});
+
+test('with no increase, or one under half a k, the band shows the size alone', () => {
+  for (const increase of [null, 0, 400, -150000]) {
+    assert.equal(words(head(draw({ kind: 'clear', remainingPct: null }, DEFAULT_CONFIG, () => {}, 312000, increase))), '🟡 312k');
+    assert.equal(words(head(draw({ kind: 'compact', remainingPct: 18 }, DEFAULT_CONFIG, () => {}, 790000, increase))), '🔴 790k 18%');
+  }
 });
 
 test('the shortcut is bound and shown only when install recorded one', () => {
@@ -82,7 +97,7 @@ test('no string in the band uses U+FE0F, which terminals draw at the wrong width
 
 test('the band wraps controls together and truncates only the question', () => {
   for (const kind of KINDS) {
-    const tree = draw({ kind, remainingPct: 18 }, { ...DEFAULT_CONFIG, shortcut: 'ctrl+x ctrl+f' }) as Node;
+    const tree = draw({ kind, remainingPct: 18 }, { ...DEFAULT_CONFIG, shortcut: 'ctrl+x ctrl+f' }, () => {}, 790000, 38000) as Node;
     assert.equal(tree.type, 'Box');
     assert.equal(tree.props.paddingTop, 1);
     assert.equal(tree.props.flexDirection, 'row');
@@ -96,7 +111,7 @@ test('the band wraps controls together and truncates only the question', () => {
     assert.deepEqual(buttons(tree)[0]?.props.hover, { bold: true });
     const question = nodes(tree).find((node) => node.type === 'Text' && words(node) === adviceQuestion(kind, 'ko'));
     assert.equal(question?.props.wrap, 'truncate-end');
-    const warning = nodes(tree).find((node) => node.type === 'Text' && words(node) === '🔴 18%');
+    const warning = nodes(tree).find((node) => node.type === 'Text' && words(node) === '🔴 790k +38k 18%');
     assert.equal(warning?.props.bold, true);
   }
 });
