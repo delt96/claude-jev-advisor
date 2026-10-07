@@ -9,17 +9,25 @@ const ICONS: Record<AdviceKind, string> = { compact: '📦', clear: '🧹' };
 
 export function drawBand(ui: BandElements, { advice, config, onPress }: BandInput): unknown {
   const { Box, Text, Button } = ui;
-  const head = advice.remainingPct === null ? '🟡' : `🔴 ${advice.remainingPct}% ·`;
-  const children: unknown[] = [
-    h(Text, null, `${head} ${adviceQuestion(advice.kind, config.lang)} `),
+  const head = advice.remainingPct === null ? '🟡' : `🔴 ${advice.remainingPct}%`;
+  const controls: unknown[] = [
     h(Button, {
       key: `jev-${advice.kind}`,
       label: `${ICONS[advice.kind]} /${advice.kind}`,
       variant: 'primary',
+      hover: { bold: true },
       onPress,
       ...(config.shortcut ? { action: SHORTCUT_ACTION } : {}),
     }),
   ];
-  if (config.shortcut) children.push(h(Text, { dimColor: true }, ` ${shortcutLabel(config.shortcut)}`));
-  return h(Box, null, ...children);
+  if (config.shortcut) controls.push(h(Text, { dimColor: true }, shortcutLabel(config.shortcut)));
+  return h(Box, { flexDirection: 'row', flexWrap: 'wrap', columnGap: 2 },
+    h(Box, { flexDirection: 'row', gap: 1, minWidth: 0, flexShrink: 1 },
+      h(Box, { flexShrink: 0 }, h(Text, { bold: advice.remainingPct !== null }, head)),
+      h(Box, { minWidth: 0, flexShrink: 1 },
+        h(Text, { wrap: 'truncate-end' }, adviceQuestion(advice.kind, config.lang)),
+      ),
+    ),
+    h(Box, { key: `jev-${advice.kind}-control`, flexDirection: 'row', gap: 1, flexShrink: 0 }, ...controls),
+  );
 }

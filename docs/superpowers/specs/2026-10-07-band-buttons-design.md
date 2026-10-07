@@ -122,3 +122,41 @@ context helper의 조언(🟡/🔴 `/compact`·`/clear`)을 읽기만 하는 문
 - `tsup.config.ts`: mod를 JSX로 쓰면 `jsxFactory: "h"` 설정
 - `README.md`, `package.json`, `mod/.claude-plugin/plugin.json`(0.4.0)
 - 테스트: `test/mod-register.test.ts`, `test/line.test.ts`, `test/install*.test.ts`, `test/status*.test.ts`
+
+## 디자인 결과 (Task 8)
+
+평소 한 줄이며, 아래 `[ … ]`는 terminal primary Button의 chrome이다. 상태·질문과 실행 그룹 사이는 두 칸, 그룹 안은 한 칸이다. 🔴 예시는 남은 18%이며 두 권고 모두 같은 배치를 쓴다.
+
+| 상황 | 언어 | 단축키 없음 | 단축키 있음 |
+|---|---|---|---|
+| compact | ko | `🟡 지금까지 정리하고 이어가는 건 어떠세요?  [ 📦 /compact ]` | `🟡 지금까지 정리하고 이어가는 건 어떠세요?  [ 📦 /compact ] ^X d` |
+| clear | ko | `🟡 새롭게 시작하는 건 어떠세요?  [ 🧹 /clear ]` | `🟡 새롭게 시작하는 건 어떠세요?  [ 🧹 /clear ] ^X d` |
+| 🔴 compact | ko | `🔴 18% 지금까지 정리하고 이어가는 건 어떠세요?  [ 📦 /compact ]` | `🔴 18% 지금까지 정리하고 이어가는 건 어떠세요?  [ 📦 /compact ] ^X d` |
+| 🔴 clear | ko | `🔴 18% 새롭게 시작하는 건 어떠세요?  [ 🧹 /clear ]` | `🔴 18% 새롭게 시작하는 건 어떠세요?  [ 🧹 /clear ] ^X d` |
+| compact | en | `🟡 Wrap up what you have and continue?  [ 📦 /compact ]` | `🟡 Wrap up what you have and continue?  [ 📦 /compact ] ^X d` |
+| clear | en | `🟡 Start fresh?  [ 🧹 /clear ]` | `🟡 Start fresh?  [ 🧹 /clear ] ^X d` |
+| 🔴 compact | en | `🔴 18% Wrap up what you have and continue?  [ 📦 /compact ]` | `🔴 18% Wrap up what you have and continue?  [ 📦 /compact ] ^X d` |
+| 🔴 clear | en | `🔴 18% Start fresh?  [ 🧹 /clear ]` | `🔴 18% Start fresh?  [ 🧹 /clear ] ^X d` |
+
+선택과 이유:
+
+- 한 줄 우선, 테두리·세로 여백 없음: 띠가 입력칸을 밀어 올리는 높이를 줄인다.
+- 상태·질문과 실행 그룹을 두 칸으로 구분: 장식 구분자 없이 읽는 부분과 누르는 부분을 구분한다.
+- 📦 /compact와 🧹 /clear 유지: 정리해 이어가기와 새로 시작하기를 명령 이름을 읽기 전에도 구분한다.
+- primary 버튼 유지: terminal의 accent 색과 대괄호로 클릭 가능한 주 행동을 강조한다.
+- 🔴 남은 %를 굵게 표시하고 기존 가운데 점 제거: 긴 한국어에서도 경고를 짧고 선명하게 둔다.
+- 단축키를 버튼 바로 뒤 흐린 글자로 표시: 버튼 이름을 간결하게 두고 보조 입력 수단을 같은 그룹에 둔다.
+- 버튼 그룹에 고유 key와 hover bold 지정: 허용된 hover scope 안에서 강조하고, 직접 포인터·포커스 반전은 엔진에 맡긴다.
+- 좁은 폭에서는 실행 그룹 전체를 다음 줄로 넘김: 버튼과 단축키가 떨어지지 않으며 질문만 truncate-end로 축약한다. 한글의 두 칸 폭 계산은 엔진 레이아웃에 맡긴다.
+
+좁은 폭의 의도된 예시(실제 줄바꿈·말줄임 위치는 엔진이 결정):
+
+```text
+🔴 18% 지금까지 정리하고 이어가는 건…
+[ 📦 /compact ] ^X d
+
+🟡 Start fresh?
+[ 🧹 /clear ]
+```
+
+실제 terminal surface의 폭별 배치·색·hover는 이 작업 환경에서 확인할 수 없다. 사용자 세션에서 확인 후 조정한다. 실행 그룹 자체보다 좁은 폭의 terminal은 완전한 표시를 보장하지 않는다.

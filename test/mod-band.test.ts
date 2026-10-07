@@ -83,3 +83,22 @@ test('shortcutLabel writes ctrl as a caret', () => {
   assert.equal(shortcutLabel('ctrl+x d'), '^X d');
   assert.equal(shortcutLabel('ctrl+x ctrl+k'), '^X ^K');
 });
+
+test('the band wraps controls together and truncates only the question', () => {
+  for (const kind of KINDS) {
+    const tree = draw({ kind, remainingPct: 18 }, { ...DEFAULT_CONFIG, shortcut: 'ctrl+x d' }) as Node;
+    assert.equal(tree.props.flexDirection, 'row');
+    assert.equal(tree.props.flexWrap, 'wrap');
+    const control = nodes(tree).find((node) => node.props.key === `jev-${kind}-control`);
+    assert.ok(control);
+    assert.equal(control.props.flexShrink, 0);
+    assert.equal(control.props.flexDirection, 'row');
+    assert.deepEqual(control.children.map((child) => (child as Node).type), ['Button', 'Text']);
+    assert.equal(words(control.children[1]), '^X d');
+    assert.deepEqual(buttons(tree)[0]?.props.hover, { bold: true });
+    const question = nodes(tree).find((node) => node.type === 'Text' && words(node) === adviceQuestion(kind, 'ko'));
+    assert.equal(question?.props.wrap, 'truncate-end');
+    const warning = nodes(tree).find((node) => node.type === 'Text' && words(node) === '🔴 18%');
+    assert.equal(warning?.props.bold, true);
+  }
+});
