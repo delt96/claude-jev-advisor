@@ -27,6 +27,7 @@ test('invalid JSON or a non-object throws', () => {
 
 test('backupName stamps the local date and time', () => {
   assert.equal(backupName(new Date(2026, 9, 2, 9, 5, 7)), 'settings.json.2026-10-02-090507-before-claude-jev-advisor');
+  assert.equal(backupName(new Date(2026, 9, 2, 9, 5, 7), 'keybindings.json'), 'keybindings.json.2026-10-02-090507-before-claude-jev-advisor');
 });
 
 test('backupSettingsFile copies the file and returns null when there is nothing to copy', () => {

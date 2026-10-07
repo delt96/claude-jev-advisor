@@ -15,16 +15,16 @@ export function readSettingsFile(file: string): Settings {
   return parsed as Settings;
 }
 
-export function backupName(now: Date): string {
+export function backupName(now: Date, fileName = 'settings.json'): string {
   const two = (n: number) => String(n).padStart(2, '0');
   const stamp = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}-${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}`;
-  return `settings.json.${stamp}-before-claude-jev-advisor`;
+  return `${fileName}.${stamp}-before-claude-jev-advisor`;
 }
 
 export function backupSettingsFile(file: string, dir: string, now: Date): string | null {
   if (!fs.existsSync(file)) return null;
   fs.mkdirSync(dir, { recursive: true });
-  const baseName = backupName(now);
+  const baseName = backupName(now, path.basename(file));
   let target = path.join(dir, baseName);
   let suffix = 2;
   while (true) {
@@ -42,7 +42,7 @@ export function backupSettingsFile(file: string, dir: string, now: Date): string
   }
 }
 
-export function writeSettingsFile(file: string, settings: Settings): void {
+export function writeSettingsFile(file: string, settings: object): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.claude-jev-advisor.tmp`;
   fs.writeFileSync(temp, `${JSON.stringify(settings, null, 2)}\n`);
