@@ -99,10 +99,10 @@ test('a version 2 config keeps a value even when it equals an old default', () =
 });
 
 test('the shortcut install recorded is read back, an empty or wrong value reads as none, and none is not saved', () => {
-  assert.equal(normalizeConfig({ shortcut: 'ctrl+x d' }).shortcut, 'ctrl+x d');
+  assert.equal(normalizeConfig({ shortcut: 'ctrl+x ctrl+f' }).shortcut, 'ctrl+x ctrl+f');
   assert.equal(normalizeConfig({ shortcut: '' }).shortcut, null);
   assert.equal(normalizeConfig({ shortcut: 3 }).shortcut, null);
   assert.equal(normalizeConfig({}).shortcut, null);
   assert.equal('shortcut' in configToSave(DEFAULT_CONFIG), false);
-  assert.equal(configToSave({ ...DEFAULT_CONFIG, shortcut: 'ctrl+x d' }).shortcut, 'ctrl+x d');
+  assert.equal(configToSave({ ...DEFAULT_CONFIG, shortcut: 'ctrl+x ctrl+f' }).shortcut, 'ctrl+x ctrl+f');
 });

@@ -22,7 +22,7 @@ export function drawBand(ui: BandElements, { advice, config, onPress }: BandInpu
     }),
   ];
   if (config.shortcut) controls.push(h(Text, { dimColor: true }, shortcutLabel(config.shortcut)));
-  return h(Box, { flexDirection: 'row', flexWrap: 'wrap', columnGap: 2 },
+  return h(Box, { flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, paddingTop: 1 },
     h(Box, { flexDirection: 'row', gap: 1, minWidth: 0, flexShrink: 1 },
       h(Box, { flexShrink: 0 }, h(Text, { bold: advice.remainingPct !== null }, head)),
       h(Box, { minWidth: 0, flexShrink: 1 },

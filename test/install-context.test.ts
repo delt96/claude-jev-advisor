@@ -146,24 +146,24 @@ test('a settings.json that cannot be saved does not lose the user status line', 
   assert.equal(fs.existsSync(statusLineBeforePath(home)), false);
 });
 
-const OURS = { context: 'DiffDialog', bindings: { 'ctrl+x d': 'diff:back' } };
+const OURS = { context: 'DiffDialog', bindings: { 'ctrl+x ctrl+f': 'diff:back' } };
 const readKb = (home: string) => JSON.parse(fs.readFileSync(keybindingsPath(home), 'utf8'));
 function writeKb(home: string, value: unknown) {
   fs.mkdirSync(path.dirname(keybindingsPath(home)), { recursive: true });
   fs.writeFileSync(keybindingsPath(home), JSON.stringify(value));
 }
 
-test('install context with the mod display binds ctrl+x d and records it', () => {
+test('install context with the mod display binds ctrl+x ctrl+f and records it', () => {
   const home = tempHome();
   const r = install(opts(home));
-  assert.deepEqual(r.shortcut, { shortcut: 'ctrl+x d', takenBy: null, problem: null, backup: null });
+  assert.deepEqual(r.shortcut, { shortcut: 'ctrl+x ctrl+f', takenBy: null, problem: null, backup: null });
   assert.deepEqual(readKb(home).bindings, [OURS]);
-  assert.equal(readConfig(home).shortcut, 'ctrl+x d');
+  assert.equal(readConfig(home).shortcut, 'ctrl+x ctrl+f');
 });
 
 test('a chord the user already uses is kept, and the shortcut is recorded as none', () => {
   const home = tempHome();
-  writeKb(home, { bindings: [{ context: 'Chat', bindings: { 'ctrl+x d': 'chat:stash' } }] });
+  writeKb(home, { bindings: [{ context: 'Chat', bindings: { 'ctrl+x ctrl+f': 'chat:stash' } }] });
   const before = fs.readFileSync(keybindingsPath(home), 'utf8');
   const r = install(opts(home));
   assert.deepEqual(r.installed, ['context']);

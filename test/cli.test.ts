@@ -89,9 +89,9 @@ test('a relative --key-file is stored as an absolute path', async () => {
 test('install prints the shortcut it bound, and uninstall says it took it out', async () => {
   const r = await cli(['install', 'context']);
   assert.equal(r.code, 0);
-  assert.match(r.out, /shortcut: ctrl\+x d presses the advice button/);
+  assert.match(r.out, /shortcut: ctrl\+x ctrl\+f presses the advice button/);
   const u = await cli(['uninstall', 'context'], r.home);
-  assert.match(u.out, /removed the ctrl\+x d shortcut from keybindings\.json/);
+  assert.match(u.out, /removed the ctrl\+x ctrl\+f shortcut from keybindings\.json/);
 });
 
 test('switching display reports the shortcut removal and its backup', async () => {
@@ -100,5 +100,5 @@ test('switching display reports the shortcut removal and its backup', async () =
   const r = await cli(['install', 'context', '--display', 'statusline'], home);
   assert.equal(r.code, 0);
   assert.equal(r.err, '');
-  assert.match(r.out, /removed the ctrl\+x d shortcut from keybindings\.json\nbackup: .*keybindings/);
+  assert.match(r.out, /removed the ctrl\+x ctrl\+f shortcut from keybindings\.json\nbackup: .*keybindings/);
 });

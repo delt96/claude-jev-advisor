@@ -35,11 +35,11 @@ claude-jev-advisor install
 
 When the context helper is installed and no key is found, `install` asks for your TypeSafe API key. What you type is hidden. It checks the key with one small Jev call and saves it to `~/.claude/claude-jev-advisor/jev-key.env`. Press Enter to skip; `claude-jev-advisor key` asks again later. Instead of typing it, you can set `TYPESAFE_API_KEY`, or pass `--key-file <path>` to a file holding a line `TYPESAFE_API_KEY=...` (then only that path is saved). The key is never printed or logged. On Windows that file is protected by your user folder's permissions only.
 
-Before it changes `~/.claude/settings.json`, `install` copies it to `~/.claude/backups/settings.json.<YYYY-MM-DD-HHmmss>-before-claude-jev-advisor`. If a backup from the same second already exists, it adds `-2`, `-3` and so on instead of overwriting it. It then adds or replaces only this package's entries. Running it again with the same version changes nothing. With the mod display it also binds `ctrl+x d` in `~/.claude/keybindings.json` (see the context helper below), backing that file up the same way first.
+Before it changes `~/.claude/settings.json`, `install` copies it to `~/.claude/backups/settings.json.<YYYY-MM-DD-HHmmss>-before-claude-jev-advisor`. If a backup from the same second already exists, it adds `-2`, `-3` and so on instead of overwriting it. It then adds or replaces only this package's entries. Running it again with the same version changes nothing. With the mod display it also binds `ctrl+x ctrl+f` in `~/.claude/keybindings.json` (see the context helper below), backing that file up the same way first.
 
 After upgrading from 0.2 or earlier, run `claude-jev-advisor install rm` again so that the rm hook also covers the PowerShell tool. Until you do, `status` shows `Bash only`.
 
-After upgrading from 0.3 or earlier, run `claude-jev-advisor install context` again so that it binds `ctrl+x d` for the advice button. Until you do, `status` shows `shortcut: none - run "claude-jev-advisor install context" ...`.
+After upgrading from 0.3 or earlier, run `claude-jev-advisor install context` again so that it binds `ctrl+x ctrl+f` for the advice button. Until you do, `status` shows `shortcut: none - run "claude-jev-advisor install context" ...`.
 
 The hooks also reach Claude Code sessions that are already open; the bottom-row display and the advice button start with the next new session. Turning a helper on or off applies at once, even to open sessions.
 
@@ -79,9 +79,9 @@ With the mod display (the default):
 
 `+38k` is how much the conversation grew in the last request, counted from when it was sent. It is left out when the conversation did not grow, for example after a `/compact`. The `statusline` and `message` displays show the whole advice on one line instead, without the increase: `🟡 312k 새롭게 시작하는 건 어떠세요? /clear` and so on.
 
-The button runs `/compact` or `/clear` at once; a `/clear` can be undone with `/resume`. Click it, press `ctrl+x d`, or press `ctrl+x tab` and then Enter. It is not drawn while a request runs or while Claude Code waits for your answer to a question, and once pressed it stays away until Jev judges a newer reply. A refused `/compact` (too few messages, for example) shows the reason in a toast.
+The button runs `/compact` or `/clear` at once; a `/clear` can be undone with `/resume`. Click it, press `ctrl+x ctrl+f`, or press `ctrl+x tab` and then Enter. It is not drawn while a request runs or while Claude Code waits for your answer to a question, and once pressed it stays away until Jev judges a newer reply. A refused `/compact` (too few messages, for example) shows the reason in a toast.
 
-`install` writes the shortcut to `~/.claude/keybindings.json` as `"ctrl+x d": "diff:back"` in the `DiffDialog` block. Claude Code lets a mod's button take the key of one of its own actions while that action is not in use; `diff:back` has no key of its own and works only inside the diff dialog, where `ctrl+x d` keeps doing that. If `ctrl+x d` is already bound in your file, or the file cannot be read, `install` leaves the file alone and says so, and the button is pressed with a click or `ctrl+x tab`. Press `d` without `ctrl`: `ctrl+d` is Claude Code's exit key. `uninstall context` and switching to another display take the line out again if it is still ours. To keep `install` from binding it, set `"ctrl+x d": null` in any block of that file.
+`install` writes the shortcut to `~/.claude/keybindings.json` as `"ctrl+x ctrl+f": "diff:back"` in the `DiffDialog` block. Claude Code lets a mod's button take the key of one of its own actions while that action is not in use; `diff:back` has no key of its own and works only inside the diff dialog, where `ctrl+x ctrl+f` keeps doing that. If `ctrl+x ctrl+f` is already bound in your file, or the file cannot be read, `install` leaves the file alone and says so, and the button is pressed with a click or `ctrl+x tab`. Both keys are pressed with `ctrl` on purpose: with a Korean or other input method on, a plain letter after `ctrl+x` arrives as another character and the chord would not match. `uninstall context` and switching to another display take the line out again if it is still ours. To keep `install` from binding it, set `"ctrl+x ctrl+f": null` in any block of that file.
 
 With `--lang en` the advice reads `Start fresh? /clear`, `Wrap up what you have and continue? /compact` and `When this work is done, wrap up and continue? /compact`.
 
@@ -180,7 +180,7 @@ A key saved by `install` or `key` stays in `~/.claude/claude-jev-advisor/jev-key
 | `~/.claude/claude-jev-advisor/statusline-before.json` | Your own status line while `--display statusline` is in use |
 | `~/.claude/claude-jev-advisor/jev-key.env` | Your TypeSafe API key, when you typed it in `install` or `key` |
 | `~/.claude/backups/settings.json.*-before-claude-jev-advisor` | Copies of `settings.json` from before each change |
-| `~/.claude/keybindings.json` | The `ctrl+x d` line, with the `mod` display |
+| `~/.claude/keybindings.json` | The `ctrl+x ctrl+f` line, with the `mod` display |
 | `~/.claude/backups/keybindings.json.*-before-claude-jev-advisor` | Copies of `keybindings.json` from before each change |
 
 Defaults:
