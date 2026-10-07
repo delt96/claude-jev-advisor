@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { installShortcut, newKeybindings, normalizeChord, removeShortcut, shortcutState, shortcutTakenBy, withShortcut, withoutShortcut, type Keybindings } from '../src/display/keybindings.js';
+import { hasShortcut, installShortcut, newKeybindings, normalizeChord, removeShortcut, shortcutState, shortcutTakenBy, withShortcut, withoutShortcut, type Keybindings } from '../src/display/keybindings.js';
 import { backupsDir, keybindingsPath } from '../src/paths.js';
 
 const NOW = new Date(2026, 9, 7, 10, 0, 0);
@@ -98,4 +98,26 @@ test('shortcutState tells present, absent and unreadable apart', () => {
   assert.equal(shortcutState(home), 'present');
   writeKb(home, '{ not json');
   assert.equal(shortcutState(home), 'unreadable');
+});
+
+test('equivalent keys report the first conflicting action even beside our binding', () => {
+  assert.equal(shortcutTakenBy(kb({ context: 'DiffDialog', bindings: { 'ctrl+x d': 'diff:back', 'Ctrl+X D': 'diff:dismiss', 'control+x d': null } })), 'DiffDialog: diff:dismiss');
+});
+
+test('installShortcut skips a conflicting block even when our binding is installed', () => {
+  const home = tempHome();
+  const text = JSON.stringify({ bindings: [OURS, { context: 'Chat', bindings: { 'ctrl+x d': 'chat:stash' } }] }, null, 2);
+  writeKb(home, text);
+  assert.deepEqual(installShortcut(home, NOW), { shortcut: null, takenBy: 'Chat: chat:stash', problem: null, backup: null });
+  assert.equal(fs.readFileSync(keybindingsPath(home), 'utf8'), text);
+  assert.equal(fs.existsSync(backupsDir(home)), false);
+});
+
+test('withoutShortcut preserves equivalent keys assigned to other actions', () => {
+  assert.deepEqual(withoutShortcut(kb({ context: 'DiffDialog', bindings: { 'ctrl+x d': 'diff:back', 'Ctrl+X D': 'diff:dismiss' } })).bindings, [{ context: 'DiffDialog', bindings: { 'Ctrl+X D': 'diff:dismiss' } }]);
+  assert.deepEqual(withoutShortcut(kb({ context: 'DiffDialog', bindings: { 'Ctrl+X D': 'diff:dismiss', 'ctrl+x d': 'diff:back', 'control+x d': 'diff:back' } })).bindings, [{ context: 'DiffDialog', bindings: { 'Ctrl+X D': 'diff:dismiss' } }]);
+});
+
+test('hasShortcut finds our action after an equivalent conflicting key', () => {
+  assert.equal(hasShortcut(kb({ context: 'DiffDialog', bindings: { 'Ctrl+X D': 'diff:dismiss', 'ctrl+x d': 'diff:back' } })), true);
 });

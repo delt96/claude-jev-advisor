@@ -29,14 +29,13 @@ export function normalizeChord(chord: string): string {
     .join(' ');
 }
 
-function chordKey(block: Block): string | null {
+function chordKeys(block: Block): string[] {
   const target = normalizeChord(SHORTCUT_CHORD);
-  return Object.keys(block.bindings).find((key) => normalizeChord(key) === target) ?? null;
+  return Object.keys(block.bindings).filter((key) => normalizeChord(key) === target);
 }
 
-function isOurs(block: Block): boolean {
-  const key = chordKey(block);
-  return block.context === SHORTCUT_CONTEXT && key !== null && block.bindings[key] === SHORTCUT_ACTION;
+function isOurs(block: Block, key: string): boolean {
+  return block.context === SHORTCUT_CONTEXT && block.bindings[key] === SHORTCUT_ACTION;
 }
 
 export function parseKeybindings(raw: unknown): Keybindings | null {
@@ -48,14 +47,15 @@ export function newKeybindings(): Keybindings {
 }
 
 export function hasShortcut(kb: Keybindings): boolean {
-  return kb.bindings.some((b) => isBlock(b) && isOurs(b));
+  return kb.bindings.some((b) => isBlock(b) && chordKeys(b).some((key) => isOurs(b, key)));
 }
 
 export function shortcutTakenBy(kb: Keybindings): string | null {
   for (const b of kb.bindings) {
-    if (!isBlock(b) || isOurs(b)) continue;
-    const key = chordKey(b);
-    if (key !== null) return `${b.context}: ${String(b.bindings[key])}`;
+    if (!isBlock(b)) continue;
+    for (const key of chordKeys(b)) {
+      if (!isOurs(b, key)) return `${b.context}: ${String(b.bindings[key])}`;
+    }
   }
   return null;
 }
@@ -77,12 +77,17 @@ export function withoutShortcut(kb: Keybindings): Keybindings {
   if (!hasShortcut(kb)) return kb;
   const bindings: unknown[] = [];
   for (const b of kb.bindings) {
-    if (!isBlock(b) || !isOurs(b)) {
+    if (!isBlock(b)) {
       bindings.push(b);
       continue;
     }
-    const key = chordKey(b) as string;
-    const { [key]: _ours, ...rest } = b.bindings;
+    const keys = chordKeys(b).filter((key) => isOurs(b, key));
+    if (!keys.length) {
+      bindings.push(b);
+      continue;
+    }
+    const rest = { ...b.bindings };
+    for (const key of keys) delete rest[key];
     if (Object.keys(rest).length) bindings.push({ ...b, bindings: rest });
   }
   return { ...kb, bindings };
@@ -100,9 +105,9 @@ export function installShortcut(home: string, now: Date): ShortcutInstall {
     const read = readKeybindings(file);
     if (read === null) return none(null, 'it holds no "bindings" list');
     const kb = read === 'missing' ? newKeybindings() : read;
-    if (hasShortcut(kb)) return { shortcut: SHORTCUT_CHORD, takenBy: null, problem: null, backup: null };
     const takenBy = shortcutTakenBy(kb);
     if (takenBy) return none(takenBy, null);
+    if (hasShortcut(kb)) return { shortcut: SHORTCUT_CHORD, takenBy: null, problem: null, backup: null };
     const backup = backupSettingsFile(file, backupsDir(home), now);
     writeSettingsFile(file, withShortcut(kb));
     return { shortcut: SHORTCUT_CHORD, takenBy: null, problem: null, backup };
