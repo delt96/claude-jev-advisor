@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_CONFIG, type Config } from '../src/config.js';
 import { adviceQuestion, type AdviceKind, type BandAdvice } from '../src/display/line.js';
-import { SHORTCUT_ACTION, shortcutLabel } from '../src/display/shortcut.js';
+import { SHORTCUT_ACTION } from '../src/display/shortcut.js';
 import { drawBand } from '../src/mod/band.js';
 
 type Node = { type: unknown; props: Record<string, unknown>; children: unknown[] };
@@ -55,10 +55,10 @@ test('the red zone shows the percent left', () => {
 test('the shortcut is bound and shown only when install recorded one', () => {
   const none = draw({ kind: 'compact', remainingPct: null });
   assert.equal(buttons(none)[0]?.props.action, undefined);
-  assert.equal(words(none).includes('^X'), false);
+  assert.equal(words(none).includes('ctrl+x'), false);
   const bound = draw({ kind: 'compact', remainingPct: null }, { ...DEFAULT_CONFIG, shortcut: 'ctrl+x ctrl+f' });
   assert.equal(buttons(bound)[0]?.props.action, SHORTCUT_ACTION);
-  assert.ok(words(bound).includes(shortcutLabel('ctrl+x ctrl+f')));
+  assert.ok(words(bound).includes('ctrl+x ctrl+f'));
 });
 
 test('pressing the button runs the handler it was given', () => {
@@ -80,11 +80,6 @@ test('no string in the band uses U+FE0F, which terminals draw at the wrong width
   }
 });
 
-test('shortcutLabel writes ctrl as a caret', () => {
-  assert.equal(shortcutLabel('ctrl+x ctrl+f'), '^X ^F');
-  assert.equal(shortcutLabel('ctrl+x ctrl+k'), '^X ^K');
-});
-
 test('the band wraps controls together and truncates only the question', () => {
   for (const kind of KINDS) {
     const tree = draw({ kind, remainingPct: 18 }, { ...DEFAULT_CONFIG, shortcut: 'ctrl+x ctrl+f' }) as Node;
@@ -97,7 +92,7 @@ test('the band wraps controls together and truncates only the question', () => {
     assert.equal(control.props.flexShrink, 0);
     assert.equal(control.props.flexDirection, 'row');
     assert.deepEqual(control.children.map((child) => (child as Node).type), ['Button', 'Text']);
-    assert.equal(words(control.children[1]), '^X ^F');
+    assert.equal(words(control.children[1]), 'ctrl+x ctrl+f');
     assert.deepEqual(buttons(tree)[0]?.props.hover, { bold: true });
     const question = nodes(tree).find((node) => node.type === 'Text' && words(node) === adviceQuestion(kind, 'ko'));
     assert.equal(question?.props.wrap, 'truncate-end');

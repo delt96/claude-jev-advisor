@@ -41,7 +41,7 @@ After upgrading from 0.2 or earlier, run `claude-jev-advisor install rm` again s
 
 After upgrading from 0.3 or earlier, run `claude-jev-advisor install context` again so that it binds `ctrl+x ctrl+f` for the advice button. Until you do, `status` shows `shortcut: none - run "claude-jev-advisor install context" ...`.
 
-The hooks also reach Claude Code sessions that are already open; the bottom-row display and the advice button start with the next new session. Turning a helper on or off applies at once, even to open sessions.
+The hooks also reach Claude Code sessions that are already open. The bottom-row display and the advice button start with the next new session; sessions that already show the bottom-row display pick up an upgrade by themselves. Turning a helper on or off applies at once, even to open sessions.
 
 ## Commands
 

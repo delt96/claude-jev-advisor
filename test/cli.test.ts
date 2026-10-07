@@ -90,6 +90,7 @@ test('install prints the shortcut it bound, and uninstall says it took it out', 
   const r = await cli(['install', 'context']);
   assert.equal(r.code, 0);
   assert.match(r.out, /shortcut: ctrl\+x ctrl\+f presses the advice button/);
+  assert.ok(r.out.includes('The bottom-row display and the advice button start with the next new session; sessions that already show the bottom-row display pick up an upgrade by themselves.'));
   const u = await cli(['uninstall', 'context'], r.home);
   assert.match(u.out, /removed the ctrl\+x ctrl\+f shortcut from keybindings\.json/);
 });

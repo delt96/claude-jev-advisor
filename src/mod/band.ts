@@ -1,6 +1,6 @@
 import type { Config } from '../config-shape.js';
 import { adviceQuestion, type AdviceKind, type BandAdvice } from '../display/line.js';
-import { SHORTCUT_ACTION, shortcutLabel } from '../display/shortcut.js';
+import { SHORTCUT_ACTION } from '../display/shortcut.js';
 
 export type BandElements = { Box: unknown; Text: unknown; Button: unknown };
 export type BandInput = { advice: BandAdvice; config: Config; onPress: () => void };
@@ -21,7 +21,7 @@ export function drawBand(ui: BandElements, { advice, config, onPress }: BandInpu
       ...(config.shortcut ? { action: SHORTCUT_ACTION } : {}),
     }),
   ];
-  if (config.shortcut) controls.push(h(Text, { dimColor: true }, shortcutLabel(config.shortcut)));
+  if (config.shortcut) controls.push(h(Text, { dimColor: true }, config.shortcut));
   return h(Box, { flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, paddingTop: 1 },
     h(Box, { flexDirection: 'row', gap: 1, minWidth: 0, flexShrink: 1 },
       h(Box, { flexShrink: 0 }, h(Text, { bold: advice.remainingPct !== null }, head)),

@@ -153,7 +153,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
         if (r.installed.length) {
           io.out(
             r.display === 'mod'
-              ? 'Hooks apply right away, also in open Claude Code sessions; the bottom-row display and the advice button start with the next new session.'
+              ? 'Hooks apply right away, also in open Claude Code sessions. The bottom-row display and the advice button start with the next new session; sessions that already show the bottom-row display pick up an upgrade by themselves.'
               : 'Hooks apply right away, also in open Claude Code sessions.',
           );
         }
