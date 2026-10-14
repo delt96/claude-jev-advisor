@@ -1,7 +1,7 @@
 import { readConfig } from '../config.js';
 import { adviceKind, adviceLine, type ContextState, type Judgment } from '../display/line.js';
 import { callJev, jevKeys, readJevKey, withoutKeys, type FetchFn } from '../jev.js';
-import { appendLog, removeState, writeState } from './files.js';
+import { appendLog, prepareAdviceDir, removeAdvice, removeState, writeState } from './files.js';
 import { backgroundTypes, busyInBackground, jevRequest, judgmentFrom } from './judge.js';
 import { readTranscript, type TranscriptFacts } from './transcript.js';
 
@@ -46,6 +46,7 @@ export async function runContextHook(event: ContextEvent, raw: string, deps: Con
   const sessionId = input.session_id;
   if (event === 'session-end') {
     removeState(deps.home, sessionId);
+    removeAdvice(deps.home, sessionId);
     appendLog(deps.home, deps.now(), { helper: 'context', event: 'session_end', sessionId, reason: typeof input.reason === 'string' ? input.reason : null });
     return null;
   }
@@ -87,6 +88,7 @@ export async function runContextHook(event: ContextEvent, raw: string, deps: Con
   const state: ContextState = { sessionId, at: at.getTime(), size, judgment };
   try {
     writeState(deps.home, state);
+    prepareAdviceDir(deps.home);
   } catch {
     // A state that cannot be saved must not also lose the log line of a Jev call already made.
   }

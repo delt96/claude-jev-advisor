@@ -93,6 +93,8 @@ Judging starts at 250k because a conversation passes 100k after a request or two
 | `statusline` | Claude Code's status line, the row above the bottom row. An existing status line of yours keeps running first, with our text after it, and is put back when you switch away or uninstall. On Windows that command runs in Git Bash when it is installed and in PowerShell otherwise, as Claude Code runs it; it gets 2 seconds. No red zone, because the auto-compact threshold is not known there. |
 | `message` | A `Stop says: …` line in the transcript when there is advice. Claude does not see it. No red zone. |
 
+With the `mod` display the band's advice is also written to `advice/<session>.json` in the data folder, as `{ "kind": "compact" | "clear" | null, "at": … }`, when it changes. [claude-alarm](https://www.npmjs.com/package/@delt/claude-alarm) 1.9 or later reads it to highlight the matching `/compact` or `/clear` button on its dashboard. A session that never had advice gets no file.
+
 `claude-jev-advisor report` shows each piece of advice with the time, the session, the size, Jev's answers, the start of the last request and what followed: compacted or cleared within the next three requests, auto-compacted, or kept going.
 
 ## The rm helper
@@ -176,6 +178,7 @@ A key saved by `install` or `key` stays in `~/.claude/claude-jev-advisor/jev-key
 |---|---|
 | `~/.claude/claude-jev-advisor/config.json` | Switches and settings that differ from the defaults. A missing or broken file reads as the defaults. A value of the wrong type falls back to its default, so only `"enabled": false` turns a helper off. |
 | `~/.claude/claude-jev-advisor/state/<session>.json` | The last judgment of each open session, read by the display. Removed when the session ends. |
+| `~/.claude/claude-jev-advisor/advice/<session>.json` | The advice the band shows (`mod` display), for claude-alarm's dashboard. Removed when the session ends. |
 | `~/.claude/claude-jev-advisor/log/YYYY-MM.jsonl` | One line per context judgment and per `rm` Jev check: the size, or the tool (`Bash` or `PowerShell`) and the command, what was sent to Jev (parts of your conversation), the answers and the result. Never the key. |
 | `~/.claude/claude-jev-advisor/statusline-before.json` | Your own status line while `--display statusline` is in use |
 | `~/.claude/claude-jev-advisor/jev-key.env` | Your TypeSafe API key, when you typed it in `install` or `key` |

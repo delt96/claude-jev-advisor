@@ -4,6 +4,7 @@ import { bandAdvice, modTail, parseState, usableJudgment, type AdviceKind, type 
 import { drawBand } from './band.js';
 
 const REFRESH_MS = 2000;
+const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/;
 
 async function readJson($: Engine, file: string): Promise<unknown> {
   try {
@@ -19,13 +20,28 @@ async function loadConfig($: Engine, dataDir: string): Promise<Config | null> {
   return raw === undefined ? null : normalizeConfig(raw);
 }
 
-async function loadState($: Engine, dataDir: string): Promise<ContextState | null> {
+async function sessionId($: Engine): Promise<string | null> {
   try {
-    const sessionId = await $.session.id();
-    const state = parseState(await readJson($, `${dataDir}/state/${sessionId}.json`));
-    return state && state.sessionId === sessionId ? state : null;
+    const id = await $.session.id();
+    return typeof id === 'string' && SAFE_SESSION_ID.test(id) ? id : null;
   } catch {
     return null;
+  }
+}
+
+async function loadState($: Engine, dataDir: string, id: string | null): Promise<ContextState | null> {
+  if (!id) return null;
+  const state = parseState(await readJson($, `${dataDir}/state/${id}.json`));
+  return state && state.sessionId === id ? state : null;
+}
+
+// claude-alarm's dashboard reads this file ({ kind, at }) to highlight its /compact or /clear button.
+async function writeAdvice($: Engine, dataDir: string, id: string, kind: AdviceKind | null): Promise<boolean> {
+  try {
+    await $.fs.write(`${dataDir}/advice/${id}.json`, JSON.stringify({ kind, at: await $.clock.now() }));
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -77,9 +93,15 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
   let baseline: number | null = null;
   let seen = '';
   let handledAt = -Infinity;
+  let written: { id: string; kind: AdviceKind | null } | null = null;
 
   const increaseTo = (size: number | null): number | null => (baseline !== null && size !== null ? size - baseline : null);
   const judgmentFor = (size: number | null): Judgment | null => (state && state.at <= handledAt ? null : usableJudgment(state, size, turnStartedAt));
+  const adviceFor = (size: number | null): AdviceKind | null => {
+    const current = config;
+    if (!current || !current.context.enabled || current.display !== 'mod') return null;
+    return bandAdvice({ size, threshold, judgment: judgmentFor(size), config: current })?.kind ?? null;
+  };
 
   // A failing mod must never swallow Claude Code's events or blank its row: every hook calls next(e) outside its try.
   on('session.start', async ($, e, next) => {
@@ -89,14 +111,20 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
       config = await loadConfig($, dataDir);
       threshold = await autoCompactThreshold($);
       $.clock.every(REFRESH_MS, () => {
-        Promise.all([loadConfig($, dataDir), loadState($, dataDir), liveSize($)])
-          .then(([nextConfig, nextState, size]) => {
+        sessionId($)
+          .then((id) => Promise.all([id, loadConfig($, dataDir), loadState($, dataDir, id), liveSize($)]))
+          .then(async ([id, nextConfig, nextState, size]) => {
             const key = JSON.stringify([nextConfig, nextState, size === null ? null : Math.round(size / 1000)]);
-            if (key === seen) return;
-            seen = key;
-            if (nextConfig) config = nextConfig;
-            state = nextState;
-            $.ui.invalidate('ui.render');
+            if (key !== seen) {
+              seen = key;
+              if (nextConfig) config = nextConfig;
+              state = nextState;
+              $.ui.invalidate('ui.render');
+            }
+            if (!id) return;
+            const kind = adviceFor(size);
+            const last = written?.id === id ? written.kind : null;
+            if (kind !== last && (await writeAdvice($, dataDir, id, kind))) written = { id, kind };
           })
           .catch(() => {});
       });

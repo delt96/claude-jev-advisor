@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseState, type ContextState } from '../display/line.js';
-import { logDir, stateDir } from '../paths.js';
+import { adviceDir, logDir, stateDir } from '../paths.js';
 
 const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/;
 const RENAME_ATTEMPTS = 3;
@@ -51,6 +51,15 @@ export function readState(home: string, sessionId: string): ContextState | null 
 export function removeState(home: string, sessionId: string): void {
   const file = statePath(home, sessionId);
   if (file) fs.rmSync(file, { force: true });
+}
+
+// The mod writes advice/<sessionId>.json, and its $.fs.write is not documented to make missing folders; this runs before any advice can exist.
+export function prepareAdviceDir(home: string): void {
+  fs.mkdirSync(adviceDir(home), { recursive: true });
+}
+
+export function removeAdvice(home: string, sessionId: string): void {
+  if (SAFE_SESSION_ID.test(sessionId)) fs.rmSync(path.join(adviceDir(home), `${sessionId}.json`), { force: true });
 }
 
 export function logFile(home: string, now: Date): string {

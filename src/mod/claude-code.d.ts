@@ -7,7 +7,7 @@ declare module 'claude-code' {
       compact(): Promise<{ skip?: unknown } | undefined>;
     };
     command: { run(args: { command: string }): Promise<unknown> };
-    fs: { read(path: string): Promise<unknown> };
+    fs: { read(path: string): Promise<unknown>; write(path: string, text: string): Promise<void> };
     clock: { now(): Promise<number>; every(ms: number, fn: () => void): unknown };
     ui: {
       invalidate(event: 'ui.render'): void;

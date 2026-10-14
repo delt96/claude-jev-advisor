@@ -4,7 +4,7 @@ import { DEFAULT_CONFIG, type Config } from '../src/config.js';
 import { register } from '../src/mod/register.js';
 
 type AnyFn = (...args: any[]) => any;
-type Fail = { usage?: boolean; now?: boolean; read?: 'throw' | 'object'; compact?: string };
+type Fail = { usage?: boolean; now?: boolean; read?: 'throw' | 'object'; compact?: string; write?: boolean };
 type Node = { type: unknown; props: Record<string, unknown>; children: unknown[] };
 
 Object.assign(globalThis, {
@@ -47,6 +47,7 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
   const fail: Fail = opts.fail ?? {};
   const toasts: string[] = [];
   const calls = { compact: 0, run: [] as unknown[] };
+  const writes: { file: string; value: unknown }[] = [];
 
   const $ = {
     session: {
@@ -74,6 +75,10 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
         if (fail.read === 'object') return { text: 'not a string' };
         if (file in opts.files) return JSON.stringify(opts.files[file]);
         throw new Error(`ENOENT ${file}`);
+      },
+      write: async (file: string, text: string) => {
+        if (fail.write) throw new Error('write failed');
+        writes.push({ file, value: JSON.parse(text) });
       },
     },
     clock: {
@@ -107,6 +112,8 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
     live,
     toasts,
     calls,
+    writes,
+    fail,
     tick,
     hooks,
     invalidations: () => invalidations,
@@ -395,4 +402,72 @@ test('pressing an older tree leaves a newer polled judgment unhandled', async ()
   await h.press(tree);
   assert.equal(h.calls.compact, 1);
   assert.ok(String(buttonOf(await h.band())?.props.label).includes('/clear'));
+});
+
+const ADVICE_FILE = 'D:/data/advice/sess-1.json';
+
+test('the advice the band shows is written for the dashboard once, with the time', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: CLEAR_STATE }, tokens: 312000, threshold: 967000 });
+  await h.start();
+  await h.tick();
+  await h.tick();
+  assert.deepEqual(h.writes, [{ file: ADVICE_FILE, value: { kind: 'clear', at: 1000 } }]);
+});
+
+test('a session that never had advice gets no advice file', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: state(900, 312000, { phase: 'working', clear: false }) }, tokens: 312000, threshold: 967000 });
+  await h.start();
+  await h.tick();
+  assert.deepEqual(h.writes, []);
+});
+
+test('advice that goes away, by a press or a new request, is written as none', async () => {
+  const pressed = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: COMPACT_STATE }, tokens: 312000, threshold: 967000 });
+  await pressed.start();
+  await pressed.press(await pressed.band());
+  await pressed.tick();
+  assert.deepEqual(pressed.writes.map((w) => w.value), [{ kind: 'compact', at: 1000 }, { kind: null, at: 1000 }]);
+
+  const asked = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: COMPACT_STATE }, tokens: 312000, threshold: 967000 });
+  await asked.start();
+  asked.setNow(5000);
+  await asked.turnStart();
+  await asked.tick();
+  assert.deepEqual(asked.writes.map((w) => w.value), [{ kind: 'compact', at: 1000 }, { kind: null, at: 5000 }]);
+});
+
+test('advice that changes kind is written again', async () => {
+  const files: Record<string, unknown> = { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: COMPACT_STATE };
+  const h = harness({ files, tokens: 312000, threshold: 967000 });
+  await h.start();
+  files[STATE_FILE] = state(1500, 312000, { phase: 'unit_done', clear: true });
+  await h.tick();
+  assert.deepEqual(h.writes.map((w) => (w.value as { kind: unknown }).kind), ['compact', 'clear']);
+});
+
+test('switching the helper or the mod display off writes the advice away', async () => {
+  for (const config of [{ ...DEFAULT_CONFIG, display: 'statusline' as const }, { ...DEFAULT_CONFIG, context: { ...DEFAULT_CONFIG.context, enabled: false } }]) {
+    const files: Record<string, unknown> = { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: CLEAR_STATE };
+    const h = harness({ files, tokens: 312000, threshold: 967000 });
+    await h.start();
+    files[CONFIG_FILE] = config;
+    await h.tick();
+    assert.deepEqual(h.writes.map((w) => (w.value as { kind: unknown }).kind), ['clear', null]);
+  }
+});
+
+test('a failed write is tried again on the next poll', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: CLEAR_STATE }, tokens: 312000, threshold: 967000, fail: { write: true } });
+  await h.start();
+  assert.deepEqual(h.writes, []);
+  h.fail.write = false;
+  await h.tick();
+  assert.deepEqual(h.writes, [{ file: ADVICE_FILE, value: { kind: 'clear', at: 1000 } }]);
+});
+
+test('a headless session writes no advice', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: CLEAR_STATE }, tokens: 312000, threshold: 967000 });
+  await h.start({ isInteractive: false });
+  await h.tick();
+  assert.deepEqual(h.writes, []);
 });

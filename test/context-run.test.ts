@@ -58,6 +58,7 @@ test('a finished stage at 312k is judged clear, saved for the display and logged
   const out = await runContextHook('stop', stop(transcript(home, 312000)), deps(home, jev(0.9, 0.85, calls)));
   assert.equal(out, null);
   assert.deepEqual(readState(home, 'sess-1'), { sessionId: 'sess-1', at: NOW.getTime(), size: 312000, judgment: { phase: 'unit_done', clear: true } });
+  assert.equal(fs.statSync(path.join(dataDir(home), 'advice')).isDirectory(), true);
   assert.equal(calls.length, 1);
   assert.deepEqual(JSON.parse(calls[0]).state, { recent_requests: ['로그인 화면 고쳐 줘'], last_assistant_reply: REPLY });
   const [log] = logLines(home);
@@ -168,9 +169,13 @@ test('switched off, nothing is read or written', async () => {
 test('session end removes the state file and logs why the session ended', async () => {
   const home = setup();
   writeState(home, { sessionId: 'sess-1', at: 1, size: 312000, judgment: null });
+  const advice = path.join(dataDir(home), 'advice', 'sess-1.json');
+  fs.mkdirSync(path.dirname(advice), { recursive: true });
+  fs.writeFileSync(advice, JSON.stringify({ kind: 'clear', at: 1 }));
   const out = await runContextHook('session-end', JSON.stringify({ session_id: 'sess-1', hook_event_name: 'SessionEnd', reason: 'clear' }), deps(home, jev(0.9, 0.9)));
   assert.equal(out, null);
   assert.equal(readState(home, 'sess-1'), null);
+  assert.equal(fs.existsSync(advice), false);
   const [log] = logLines(home);
   assert.equal(log.event, 'session_end');
   assert.equal(log.reason, 'clear');
