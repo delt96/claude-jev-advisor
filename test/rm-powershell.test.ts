@@ -274,7 +274,8 @@ test('LOCALAPPDATA is followed like the other well-known variables', { skip }, a
 test('a script file run by a path that can be worked out is read like one written out', { skip }, async () => {
   const none = { deny: null, targets: [], failed: [], shells: [] };
   assert.deepEqual(await read(`$W = "${TMP}\\de03"; Remove-Item -Recurse -Force "$W\\png" -ErrorAction SilentlyContinue; & "$W\\export.ps1" -pptx "$W\\a.pptx"`), none);
-  assert.deepEqual(await read(`$W = "${TMP}\\de03"; . "$W\\helpers.ps1"; & $W\\run.cmd; Remove-Item "$W\\x"`), none);
+  assert.deepEqual(await read(`$W = "${TMP}\\de03"; Remove-Item "$W\\x"; . "$W\\helpers.ps1"`), none);
+  assert.deepEqual(await read(`$W = "${TMP}\\de03"; Remove-Item "$W\\x"; & $W\\run.cmd`), none);
   assert.deepEqual(await read('$W = "C:\\tools"; & "$W\\build.bat"; Remove-Item C:\\data\\a.txt'), { deny: null, targets: [{ shown: 'C:\\data\\a.txt', path: 'C:\\data\\a.txt' }], failed: [], shells: [] });
   const sources = [
     '$W = "C:\\Windows\\System32"; & "$W\\cmd.exe" /c rd /s /q C:\\data',
@@ -288,6 +289,13 @@ test('a script file run by a path that can be worked out is read like one writte
   sources.forEach((source, i) => assert.deepEqual(results[i].failed, [source], source));
 });
 
+test('after a script runs, the variables and the folder it may have changed are not known', { skip }, async () => {
+  assert.match(await denied(`$W = "${TMP}\\d"; . "$W\\config.ps1"; Remove-Item "$W\\package.json"`), /a variable that cannot be worked out/);
+  assert.match(await denied(`$W = "${TMP}\\d"; & "$W\\move.ps1"; Remove-Item package.json`), /a path relative to a folder that cannot be worked out/);
+  assert.match(await denied(`$W = "${TMP}\\d"; & "$W\\a.ps1"; Remove-Item "$env:TEMP\\x"`), /a variable that cannot be worked out/);
+  assert.deepEqual((await read(`$W = "${TMP}\\d"; foreach ($n in 1, 2) { Remove-Item "$W\\x"; & "$W\\s.ps1" }`)).failed.length, 1);
+});
+
 test('Delete right on what Get-Item returned reads the path Get-Item was given', { skip }, async () => {
   const none = { deny: null, targets: [], failed: [], shells: [] };
   assert.deepEqual(await read(`(Get-Item "${TMP}\\wt\\node_modules" -Force).Delete()`), none);
@@ -295,6 +303,8 @@ test('Delete right on what Get-Item returned reads the path Get-Item was given',
   assert.deepEqual(await shown('(Get-Item C:\\data).Delete($true)'), ['C:\\data']);
   assert.deepEqual(await shown('(gi -LiteralPath C:\\data\\[a].txt).Delete()'), ['C:\\data\\[a].txt']);
   assert.deepEqual(await shown('(Get-Item C:\\data\\*.log).Delete()'), ['C:\\data\\*.log']);
+  assert.deepEqual(await read(`(Get-Item '${TMP}\\x').Delete(); & Write-Host done`), none);
+  assert.deepEqual(await read(`$text = 'content'; New-Item -ItemType File -Path '${TMP}\\new.txt' -Value $text; (Get-Item '${TMP}\\x').Delete()`), none);
   const sources = [
     `$i = Get-Item "${TMP}\\x"; $i.Delete()`,
     '(Get-Item C:\\data | Select-Object -First 1).Delete()',
@@ -305,6 +315,7 @@ test('Delete right on what Get-Item returned reads the path Get-Item was given',
     `Set-Item ('Func' + 'tion:Get-Item') { Get-ChildItem C:\\data }; (Get-Item "${TMP}\\x").Delete()`,
     `& "${TMP}\\setup.ps1"; (Get-Item "${TMP}\\x").Delete()`,
     `Import-Module "${TMP}\\m.psm1"; (Get-Item "${TMP}\\x").Delete()`,
+    `$p = 'Func' + 'tion:Get-Item'; New-Item -Path $p -Value { Get-ChildItem C:\\data }; (Get-Item "${TMP}\\x").Delete()`,
   ];
   const results = await Promise.all(sources.map((source) => read(source)));
   sources.forEach((source, i) => assert.deepEqual(results[i].failed, [source], source));

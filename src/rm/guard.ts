@@ -17,8 +17,10 @@ const SHELL_WORDS = /\b(?:sh|bash|cmd|powershell|pwsh)(?:\.exe)?\b/i;
 // Marks an expansion inside double quotes, which bash neither splits into more words nor expands as a wildcard.
 const QUOTED = '\u0002';
 const plain = (value: string) => value.split(QUOTED).join('');
-// Commands that can set a variable by a name the reader cannot see, IFS included.
-const NAME_WRITERS = /\b(?:read|declare|typeset|local|export|readonly|printf|eval|mapfile|readarray|let|unset|source)\b[^;&|\n]*[$`]|(?:^|[\s;&|(])\.\s/;
+const NAME_SETTERS = new Set(['declare', 'typeset', 'local', 'export', 'readonly', 'let', 'unset']);
+const NAME_READERS = new Set(['read', 'mapfile', 'readarray']);
+// Options of read and mapfile that take a value rather than a variable name.
+const VALUE_OPTIONS = /^-[pdntuNCOs]$/;
 
 // literal: a $ that bash keeps as text (quoted, escaped or alone), which expand must not read as a variable.
 type Word = { value: string; dynamic: boolean; glob: boolean; tilde: boolean; brace: boolean; literal: boolean };
@@ -291,12 +293,36 @@ function locate(target: WordToken, value: string, ctx: Ctx): Classified {
   return { real: judgePath(resolved.path!, pattern, ctx) ?? undefined };
 }
 
+// A command that sets a variable by a name built while it runs, or runs code the reader does not see, may set IFS.
+function setsBuiltName(commands: Command[]): boolean {
+  const built = (w: WordToken) => w.dynamic && /[$`]/.test(w.value.split('=')[0]);
+  for (const { words } of commands) {
+    const rest = stripPrefixes(words);
+    if (!rest.length) continue;
+    const name = commandName(rest[0]);
+    const args = rest.slice(1);
+    if (name === null || name === 'eval' || name === 'source' || name === '.') return true;
+    if (NAME_SETTERS.has(name) && args.some(built)) return true;
+    if (NAME_READERS.has(name)) {
+      for (let k = 0; k < args.length; k++) {
+        if (!args[k].dynamic && VALUE_OPTIONS.test(args[k].value)) k++;
+        else if (!(!args[k].dynamic && args[k].value.startsWith('-')) && built(args[k])) return true;
+      }
+    }
+    if (name === 'printf') {
+      const v = args.findIndex((w) => !w.dynamic && w.value === '-v');
+      if (v >= 0 && args[v + 1] && built(args[v + 1])) return true;
+    }
+  }
+  return false;
+}
+
 export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: ReadCtx): ReadResult {
   const out = emptyRead();
   if (!/\b(?:rm|rmdir|xargs)\b/.test(command) && !SHELL_WORDS.test(command)) return out;
   const commands = splitCommands(tokenize(stripHeredocs(command)));
   const vars: Vars = new Map(KNOWN_ENV.filter((n) => env[n]).map((n): [string, string] => [n, env[n] as string]));
-  const ctx: Ctx = { cwd, home, tmpdirs, probe, vars, ifs: /\bIFS\b/.test(command.replace(/['"\\]/g, '')) || NAME_WRITERS.test(command) };
+  const ctx: Ctx = { cwd, home, tmpdirs, probe, vars, ifs: /\bIFS\b/.test(command.replace(/['"\\]/g, '')) || setsBuiltName(commands) };
   const setCwd = (next: string | null) => { ctx.cwd = next; vars.set('PWD', next); };
   const deny = (why: string): ReadResult => ({ ...out, deny: denyReason('bash', why) });
   setCwd(cwd);

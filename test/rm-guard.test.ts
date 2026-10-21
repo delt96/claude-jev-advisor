@@ -139,6 +139,12 @@ test('a variable bash would split into more words, or a literal dollar beside a 
   assert.equal(decision('D=/tmp; N=\'x y\'; rm -rf $D/"$N"'), 'none');
   assert.equal(decision('GIFS=/tmp; rm -rf $GIFS/x'), 'none');
   assert.equal(decision('n=I; read -r "${n}FS" <<< :; S=/tmp/x; rm -rf $S'), 'deny');
+  for (const cmd of ['n=IFS; declare "$n=:"; S=/tmp/x; rm -rf $S', 'n=IFS; printf -v "$n" :; S=/tmp/x; rm -rf $S', 'eval "$x"; S=/tmp/x; rm -rf $S', '. ./env.sh; S=/tmp/x; rm -rf $S']) {
+    assert.equal(decision(cmd), 'deny', cmd);
+  }
+  for (const cmd of ['export S="$TEMP/x"; rm -rf $S', 'S=/tmp/x; printf "%s\\n" "$S"; rm -rf $S', 'S=/tmp/x; read -r -p "$S? " ok; rm -rf $S', 'local S=/tmp/x; rm -rf $S']) {
+    assert.equal(decision(cmd), 'none', cmd);
+  }
   assert.equal(read('rm -rf "$LOCALAPPDATA/Temp/probe"'), 'none');
   const bracketed = { LOCALAPPDATA: 'C:/Users/user[0]/AppData/Local' };
   const glob = decide({ command: 'rm -rf $LOCALAPPDATA/Temp/victim', cwd: PROJECT, home: 'C:\\Users\\me', tmpdirs: ['C:\\Users\\user[0]\\AppData\\Local\\Temp'], env: bracketed, probe });

@@ -146,18 +146,28 @@ $getItems = @('get-item', 'gi')
 # A function, an alias or a module made in the command can take any name, a path-shaped one included, so no name it
 # uses is trusted to be what it says; an item command with a computed path may be writing to function: or alias:.
 $itemCommands = @('set-item', 'si', 'new-item', 'ni', 'copy-item', 'cpi', 'copy', 'cp', 'rename-item', 'rni', 'ren', 'move-item', 'mi', 'mv', 'move')
+function ComputedTarget($command) {
+  $binding = [System.Management.Automation.Language.StaticParameterBinder]::BindCommand($command, $true)
+  if ($binding.BindingExceptions.Count -gt 0) { return $true }
+  foreach ($key in @('Path', 'LiteralPath', 'Destination', 'NewName', 'Name')) {
+    if ($binding.BoundParameters.ContainsKey($key)) {
+      $v = $binding.BoundParameters[$key].Value
+      if ($null -ne $v -and -not (Constant $v)) { return $true }
+    }
+  }
+  return $false
+}
 $redefines = ($source -match 'function:|alias:|using\s+module') -or @($root.FindAll({
   param($x)
   if ($x -is [System.Management.Automation.Language.FunctionDefinitionAst]) { return $true }
   if (-not ($x -is [System.Management.Automation.Language.CommandAst])) { return $false }
   $n = NameOf $x
-  (@('set-alias', 'sal', 'new-alias', 'nal', 'import-module', 'ipmo') -contains $n) -or
-  ($itemCommands -contains $n -and @($x.CommandElements | Select-Object -Skip 1 | Where-Object { -not (Constant $_) }).Count -gt 0)
+  (@('set-alias', 'sal', 'new-alias', 'nal', 'import-module', 'ipmo') -contains $n) -or ($itemCommands -contains $n -and (ComputedTarget $x))
 }, $true)).Count -gt 0
 # A script the command runs can define a global Get-Item before the one read here.
 $runsScripts = @($root.FindAll({
   param($x)
-  $x -is [System.Management.Automation.Language.CommandAst] -and ([string]$x.InvocationOperator -ne 'Unknown' -or (NameOf $x) -match '\.(ps1|psm1)$')
+  $x -is [System.Management.Automation.Language.CommandAst] -and ((([string]$x.InvocationOperator -ne 'Unknown') -and $null -eq (NameOf $x)) -or (NameOf $x) -match '\.(ps1|psm1)$')
 }, $true)).Count -gt 0
 
 function GetItemOf($pipeline) {
@@ -465,8 +475,12 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
     const { items, unstable, anyVariable } = parse(stdout);
     const assigned = new Map<string, number>();
     for (const item of items) if (item.kind === 'assign') assigned.set(baseName(item.name), (assigned.get(baseName(item.name)) ?? 0) + 1);
-    // A loop, a function or a script block can run after a later folder move, so its relative names follow no move.
-    const moves = items.some((item) => item.kind === 'cd' || item.kind === 'pop');
+    // A loop, a function or a script block can run after a later folder move, so its relative names follow no move. A
+    // script the command runs can move the folder and set any variable, so after it nothing is known, and a loop or
+    // block that may run after it is not read at all.
+    const scripts = items.some((item) => item.kind === 'call');
+    const moves = scripts || items.some((item) => item.kind === 'cd' || item.kind === 'pop');
+    let ranScript = false;
     // .NET reads a relative path in the process's folder, which Set-Location does not change but CurrentDirectory does.
     const processFolder = /CurrentDirectory/i.test(source) ? null : ctx.cwd;
     const vars = new Map<string, string | null>();
@@ -478,7 +492,7 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
     let cwd = ctx.cwd;
     const variable = (name: string, here: string | null): string | null => {
       const key = baseName(name);
-      if (anyVariable || unstable.has(key) || AUTOMATIC.has(key)) return null;
+      if (anyVariable || ranScript || unstable.has(key) || AUTOMATIC.has(key)) return null;
       if (key === 'pwd') return assigned.has('pwd') ? null : here;
       return vars.get(key) ?? null;
     };
@@ -523,10 +537,16 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
       } else if (item.kind === 'call') {
         // A script file named by its path runs like one written out, which the reader does not follow either; any
         // other name could be a cmdlet, an alias or a shell.
-        const text = textOf(item.command, item.ordered || !moves ? cwd : null);
+        const text = item.ordered ? textOf(item.command) : null;
         if ((text === null || !SCRIPT_FILE.test(text)) && DELETE_WORD.test(source) && !out.failed.length) out.failed.push(excerpt);
+        ranScript = true;
+        cwd = null;
       } else {
         if (item.whatIf) continue;
+        if (scripts && !item.ordered) {
+          if (!out.failed.length) out.failed.push(excerpt);
+          continue;
+        }
         if (item.bindError) {
           if (!out.failed.length) out.failed.push(excerpt);
           continue;
@@ -538,7 +558,7 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
           if ('dynamic' in v || 'array' in v) return deny(`an expression that cannot be worked out (${'dynamic' in v ? v.dynamic : 'a nested list'})`);
           const text = textOf(v, here);
           if (text === null) return deny(`a variable that cannot be worked out (${'variable' in v ? `$${v.variable}` : 'expand' in v ? v.text : ''})`);
-          const c = classify(text, item.literal, item.dotnet ? processFolder : here, ctx);
+          const c = classify(text, item.literal, item.dotnet ? (ranScript ? null : processFolder) : here, ctx);
           if (c.unresolvable) return deny(c.unresolvable);
           if (c.real) out.targets.push(c.real);
         }

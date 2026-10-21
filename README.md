@@ -126,6 +126,7 @@ A target cannot be worked out when it uses:
 - brace expansion
 - a wildcard in a folder name
 - a `cd`, `pushd`, `Set-Location` or `Push-Location` to such a path earlier in the command, a `popd` or `Pop-Location`, or a location change inside a PowerShell block; in PowerShell also a relative path inside a loop, a function or a script block when the command changes location anywhere
+- in PowerShell, a variable or a relative path after the command runs a script file (`& "$W\x.ps1"`, `. "$W\x.ps1"`), which may change both, and any deletion in a loop or block of such a command
 - a PowerShell drive other than a drive letter and the non-file drives above, such as one made with `New-PSDrive`
 - a nested shell whose script is not fixed text and holds a delete word, or shells nested more than three deep that delete
 - in `cmd`, a delete on a line that uses `if`, `else`, `for`, `call`, `start` or unquoted parentheses, or starts a command with a name it cannot read: write plain `del` or `rd` lines instead, with names that hold parentheses in double quotes
