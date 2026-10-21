@@ -31,7 +31,7 @@ export type DecideInput = {
   env?: Record<string, string | undefined>;
   probe: Probe;
 };
-type Ctx = { cwd: string | null; home: string; tmpdirs: string[]; probe: Probe; vars: Vars };
+type Ctx = { cwd: string | null; home: string; tmpdirs: string[]; probe: Probe; vars: Vars; digits: RegExp | null };
 
 export function stripHeredocs(text: string): string {
   const out: string[] = [];
@@ -223,15 +223,22 @@ function nativeArg(value: string | null, tmpdir: string): string | null {
   return null;
 }
 
-// Bash fills these with digits and never leaves them empty, so they cannot add a folder step or `..` to a path.
-const DIGITS = /\$\$|\$\{\$\}|\$\{(RANDOM|PPID|BASHPID)\}|\$(RANDOM|PPID|BASHPID)(?![A-Za-z0-9_])/g;
 const ASSUME_REAL: Probe = { exists: () => true, isIgnored: () => false };
+
+// Bash fills these with digits and never leaves them empty, so they cannot add a folder step or `..` to a path. $$ and
+// the read-only PPID always hold; RANDOM and BASHPID lose that once unset or read into, and an IFS holding digits
+// splits any of them into more words.
+function digitsPattern(command: string): RegExp | null {
+  if (/\bIFS\b/.test(command)) return null;
+  const names = ['PPID', ...['RANDOM', 'BASHPID'].filter((n) => !new RegExp(`(?<!\\$\\{?)\\b${n}\\b`).test(command))].join('|');
+  return new RegExp(`\\$\\$|\\$\\{\\$\\}|\\$\\{(${names})\\}|\\$(${names})(?![A-Za-z0-9_])`, 'g');
+}
 
 function classify(target: WordToken, ctx: Ctx): Classified {
   if (target.brace) return { unresolvable: `brace expansion (${target.value})` };
   const value = expand(target, ctx.vars);
   if (value === null) {
-    const digits = target.value.replace(DIGITS, (m: string, braced?: string, bare?: string) => (ctx.vars.has(braced ?? bare ?? '') ? m : '0'));
+    const digits = ctx.digits === null ? target.value : target.value.replace(ctx.digits, (m: string, braced?: string, bare?: string) => (ctx.vars.has(braced ?? bare ?? '') ? m : '0'));
     const guess = digits === target.value ? null : expand({ value: digits, dynamic: true }, ctx.vars);
     if (guess !== null) {
       const c = locate(target, guess, { ...ctx, probe: ASSUME_REAL });
@@ -262,7 +269,7 @@ export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: Re
   if (!/\b(?:rm|rmdir|xargs)\b/.test(command) && !SHELL_WORDS.test(command)) return out;
   const commands = splitCommands(tokenize(stripHeredocs(command)));
   const vars: Vars = new Map(KNOWN_ENV.filter((n) => env[n]).map((n): [string, string] => [n, env[n] as string]));
-  const ctx: Ctx = { cwd, home, tmpdirs, probe, vars };
+  const ctx: Ctx = { cwd, home, tmpdirs, probe, vars, digits: digitsPattern(command) };
   const setCwd = (next: string | null) => { ctx.cwd = next; vars.set('PWD', next); };
   const deny = (why: string): ReadResult => ({ ...out, deny: denyReason('bash', why) });
   setCwd(cwd);

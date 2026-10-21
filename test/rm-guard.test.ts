@@ -110,7 +110,8 @@ test('a path that lands in temp whatever digits fill it is left alone', () => {
 });
 
 test('digits that fill a path outside temp, or a path that leaves temp, are still denied', () => {
-  for (const cmd of ['rm -f out_$$.log', 'rm -rf /tmp/$$/../../x', 'rm -rf /tmp/$!', 'rm -rf /tmp/x_${OUT}_$$', 'rm -rf /tmp/$RANDOMX', 'rm -rf /tmp/$(date +%s)']) {
+  for (const cmd of ['rm -f out_$$.log', 'rm -rf /tmp/$$/../../x', 'rm -rf /tmp/$!', 'rm -rf /tmp/x_${OUT}_$$', 'rm -rf /tmp/$RANDOMX', 'rm -rf /tmp/$(date +%s)',
+    'unset RANDOM; rm -rf /tmp/$RANDOM', 'read BASHPID < f; rm -rf /tmp/x${BASHPID}', 'IFS=0123456789; rm -rf /tmp/a$$b']) {
     assert.equal(decision(cmd), 'deny', cmd);
   }
   assert.equal(decision('RANDOM=/c/data; rm -rf /c$RANDOM'), 'ask');

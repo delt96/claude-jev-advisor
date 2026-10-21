@@ -293,7 +293,9 @@ test('Delete on what Get-Item returned reads the path Get-Item was given', { ski
   assert.deepEqual(await shown('(Get-Item C:\\data).Delete($true)'), ['C:\\data']);
   assert.deepEqual(await shown('$i = gi -LiteralPath C:\\data\\[a].txt; $i.Delete()'), ['C:\\data\\[a].txt']);
   assert.deepEqual(await shown('$i = Get-Item C:\\data\\*.log; $i.Delete()'), ['C:\\data\\*.log']);
-  assert.match(await denied('$i = Get-Item a.txt; Set-Location C:\\x; $i.Delete()'), /a path relative to a folder that cannot be worked out/);
+  assert.deepEqual(await shown('$i = Get-Item a.txt; Set-Location C:\\x; $i.Delete()'), ['C:\\workspace\\proj\\a.txt']);
+  assert.match(await denied(`$i = Get-Item "$W\\x"; $W = "${TMP}"; $i.Delete()`), /a variable that cannot be worked out/);
+  assert.deepEqual(await read(`$i = Get-Item "$env:TEMP\\x"; $env:TEMP = "C:\\data"; $i.Delete()`), none);
   const sources = [
     '$i = Get-Item C:\\data\\a.txt; $i = Get-ChildItem C:\\data; $i.Delete()',
     '$i = Get-Item C:\\data\\a.txt; Set-Variable i (Get-ChildItem C:\\data); $i.Delete()',

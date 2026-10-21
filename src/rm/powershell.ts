@@ -158,6 +158,13 @@ foreach ($s in $root.FindAll({ param($x) $x -is [System.Management.Automation.La
   $key = $left.VariablePath.UserPath.ToLowerInvariant()
   if ($null -ne $c -and -not $gotItems.ContainsKey($key)) { $gotItems[$key] = $c }
 }
+# Get-Item works out its path where it runs, so a later change to a variable in that path or to the folder must not
+# reach it: such a Delete() is read at its Get-Item, keyed by where that command starts.
+$deleteAt = @{}
+foreach ($m in $root.FindAll({ param($x) $x -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and -not $x.Static -and $x.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $x.Member.Value -eq 'delete' -and $x.Expression -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $x.Expression.Splatted }, $true)) {
+  $key = $m.Expression.VariablePath.UserPath.ToLowerInvariant()
+  if ($gotItems.ContainsKey($key)) { $deleteAt[$gotItems[$key].Extent.StartOffset] = $m.Expression.VariablePath.UserPath }
+}
 
 # A name handed over as text (-OutVariable d, Tee-Object -Variable d, Set-Item variable:d, 'TEMP' handed to
 # SetEnvironmentVariable, '$d = 1' handed to iex) can write a variable without the parser seeing a variable there.
@@ -180,6 +187,16 @@ foreach ($v in $root.FindAll({ param($x) $x -is [System.Management.Automation.La
 }
 
 $items = New-Object System.Collections.ArrayList
+
+function GotDelete($command, $via) {
+  $b = Bound $command
+  if ($b.bindError -or $null -ne $b.path -or $null -ne $b.literalPath) {
+    [void]$items.Add(@{ kind = 'delete'; path = $b.path; literalPath = $b.literalPath; literal = ($null -ne $b.literalPath); dotnet = $false; whatIf = $false; bindError = $b.bindError; inPipeline = $false; ordered = (InOrder $command); via = $via })
+  } else {
+    [void]$items.Add(@{ kind = 'dynamic'; text = $null; args = @() })
+  }
+}
+
 $found = $root.FindAll({
   param($a)
   $a -is [System.Management.Automation.Language.CommandAst] -or
@@ -222,25 +239,15 @@ foreach ($a in $found) {
   if ($a -is [System.Management.Automation.Language.InvokeMemberExpressionAst]) {
     $member = if ($a.Member -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $a.Member.Value.ToLowerInvariant() } else { $null }
     $type = if ($a.Expression -is [System.Management.Automation.Language.TypeExpressionAst]) { $a.Expression.TypeName.FullName.ToLowerInvariant() } else { $null }
-    $got = $null
-    $via = $null
-    if (-not $a.Static -and $member -eq 'delete') {
-      $on = $a.Expression
-      if ($on -is [System.Management.Automation.Language.ParenExpressionAst]) { $got = GetItemOf $on.Pipeline }
-      elseif ($on -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $on.Splatted) {
-        $via = $on.VariablePath.UserPath
-        $got = $gotItems[$via.ToLowerInvariant()]
-      }
-    }
-    $bound = if ($null -ne $got) { Bound $got } else { $null }
+    $on = $a.Expression
+    $instanceDelete = -not $a.Static -and $member -eq 'delete'
+    if ($instanceDelete -and $on -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $on.Splatted -and $gotItems.ContainsKey($on.VariablePath.UserPath.ToLowerInvariant())) { continue }
+    $got = if ($instanceDelete -and $on -is [System.Management.Automation.Language.ParenExpressionAst]) { GetItemOf $on.Pipeline } else { $null }
     if ($a.Static -and $member -eq 'delete' -and $dotnet -contains $type) {
       $first = if ($a.Arguments -and $a.Arguments.Count -gt 0) { Value $a.Arguments[0] } else { @{ dynamic = $a.Extent.Text } }
       [void]$items.Add(@{ kind = 'delete'; path = $first; literalPath = $null; literal = $true; dotnet = $true; whatIf = $false; bindError = $false; inPipeline = $false; ordered = (InOrder $a) })
-    } elseif ($null -ne $bound -and ($bound.bindError -or $null -ne $bound.path -or $null -ne $bound.literalPath)) {
-      # Get-Item read a relative path where the command stood when the variable was filled, not at Delete(), so a
-      # folder move anywhere in the command leaves it unknown.
-      $ordered = if ($null -eq $via) { InOrder $a } else { $false }
-      [void]$items.Add(@{ kind = 'delete'; path = $bound.path; literalPath = $bound.literalPath; literal = ($null -ne $bound.literalPath); dotnet = $false; whatIf = $false; bindError = $bound.bindError; inPipeline = $false; ordered = $ordered; via = $via })
+    } elseif ($null -ne $got) {
+      GotDelete $got $null
     } elseif ($null -eq $member -or ($a.Static -and $null -eq $type) -or $codeMethods -contains $member -or
       ($member -eq 'create' -and $type -match '(^|\.)(scriptblock|powershell)$') -or
       ($member -eq 'start' -and ($type -match '(^|\.)process$' -or ($null -eq $type -and $processStart))) -or
@@ -258,6 +265,10 @@ foreach ($a in $found) {
     } else {
       [void]$items.Add(@{ kind = 'dynamic'; text = $null; args = @() })
     }
+    continue
+  }
+  if ($getItems -contains $name -and $deleteAt.ContainsKey($a.Extent.StartOffset)) {
+    GotDelete $a $deleteAt[$a.Extent.StartOffset]
     continue
   }
   $pipeline = $a.Parent
