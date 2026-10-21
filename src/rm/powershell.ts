@@ -11,7 +11,7 @@ const OTHER_DRIVES = new Set(['alias', 'env', 'function', 'variable', 'hklm', 'h
 const EXCERPT_CHARS = 200;
 const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'LOCALAPPDATA'];
 // PowerShell fills these itself (a pipeline's $_, a function's $args) without an assignment the reader could see.
-const AUTOMATIC = new Set(['_', 'psitem', 'args', 'input', 'this', 'matches', 'foreach', 'switch', 'event', 'eventargs', 'sender']);
+const AUTOMATIC = new Set(['_', 'psitem', 'args', 'input', 'this', 'matches', 'foreach', 'switch', 'event', 'eventargs', 'sender', 'lastexitcode', 'error', 'myinvocation', 'pscmdlet', 'psboundparameters', 'stacktrace', 'psscriptroot', 'pscommandpath']);
 const SCRIPT_FILE = /[\\/][^\\/]+\.(?:ps1|bat|cmd)$/i;
 
 export type PowerShellRunner = (source: string) => Promise<string | null>;
@@ -19,7 +19,7 @@ export type PowerShellRunner = (source: string) => Promise<string | null>;
 type Part = { const: string } | { variable: string };
 type Value = Part | { expand: Part[]; text: string } | { array: Value[] } | { dynamic: string };
 type Item =
-  | { kind: 'delete'; path: Value | null; literalPath: Value | null; literal: boolean; dotnet: boolean; whatIf: boolean; bindError: boolean; inPipeline: boolean; ordered: boolean; via: string | null }
+  | { kind: 'delete'; path: Value | null; literalPath: Value | null; literal: boolean; dotnet: boolean; whatIf: boolean; bindError: boolean; inPipeline: boolean; ordered: boolean }
   | { kind: 'call'; command: Value; ordered: boolean }
   | { kind: 'cd'; path: Value | null; literal: boolean; inBlock: boolean }
   | { kind: 'pop' }
@@ -143,47 +143,29 @@ $fileObjects = ($source -match 'FileInfo|DirectoryInfo|FileSystemInfo') -or @($r
 }, $true)).Count -gt 0
 $processStart = $source -match 'ProcessStartInfo|Diagnostics\.Process'
 $getItems = @('get-item', 'gi')
-# A function or an alias made in the command can take any name, a path-shaped one included, so no name it uses is
-# trusted to be what it says.
-$redefines = ($source -match 'function:|alias:') -or @($root.FindAll({
+# A function, an alias or a module made in the command can take any name, a path-shaped one included, so no name it
+# uses is trusted to be what it says; an item command with a computed path may be writing to function: or alias:.
+$itemCommands = @('set-item', 'si', 'new-item', 'ni', 'copy-item', 'cpi', 'copy', 'cp', 'rename-item', 'rni', 'ren', 'move-item', 'mi', 'mv', 'move')
+$redefines = ($source -match 'function:|alias:|using\s+module') -or @($root.FindAll({
   param($x)
-  $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -or
-  ($x -is [System.Management.Automation.Language.CommandAst] -and @('set-alias', 'sal', 'new-alias', 'nal') -contains (NameOf $x))
+  if ($x -is [System.Management.Automation.Language.FunctionDefinitionAst]) { return $true }
+  if (-not ($x -is [System.Management.Automation.Language.CommandAst])) { return $false }
+  $n = NameOf $x
+  (@('set-alias', 'sal', 'new-alias', 'nal', 'import-module', 'ipmo') -contains $n) -or
+  ($itemCommands -contains $n -and @($x.CommandElements | Select-Object -Skip 1 | Where-Object { -not (Constant $_) }).Count -gt 0)
 }, $true)).Count -gt 0
-# PowerShell fills these itself, without an assignment the reader could see.
-$automatic = @('_', 'psitem', 'args', 'input', 'this', 'matches', 'foreach', 'switch', 'event', 'eventargs', 'sender')
+# A script the command runs can define a global Get-Item before the one read here.
+$runsScripts = @($root.FindAll({
+  param($x)
+  $x -is [System.Management.Automation.Language.CommandAst] -and ([string]$x.InvocationOperator -ne 'Unknown' -or (NameOf $x) -match '\.(ps1|psm1)$')
+}, $true)).Count -gt 0
 
 function GetItemOf($pipeline) {
-  if ($redefines) { return $null }
+  if ($redefines -or $runsScripts) { return $null }
   if (-not ($pipeline -is [System.Management.Automation.Language.PipelineAst]) -or $pipeline.PipelineElements.Count -ne 1) { return $null }
   $c = $pipeline.PipelineElements[0]
   if ($c -is [System.Management.Automation.Language.CommandAst] -and $getItems -contains (NameOf $c)) { return $c }
   return $null
-}
-
-# The reader trusts a variable named here only while it is assigned once; the TypeScript side counts that.
-$gotItems = @{}
-foreach ($s in $root.FindAll({ param($x) $x -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
-  $left = $s.Left
-  if (-not ($left -is [System.Management.Automation.Language.VariableExpressionAst]) -or $left.Splatted -or $s.Operator -ne 'Equals' -or -not (TopLevel $s)) { continue }
-  $c = GetItemOf $s.Right
-  $key = $left.VariablePath.UserPath.ToLowerInvariant()
-  if ($null -ne $c -and -not $gotItems.ContainsKey($key)) { $gotItems[$key] = $c }
-}
-# Get-Item works out its path where it runs, so a later change to a variable in that path or to the folder must not
-# reach it: such a Delete() is read at its Get-Item, keyed by where that command starts.
-$deleteAt = @{}
-$readAtGetItem = New-Object 'System.Collections.Generic.HashSet[int]'
-$calls = @($root.FindAll({ param($x) $x -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and -not $x.Static -and $x.Expression -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $x.Expression.Splatted }, $true))
-# Any other method on the object (MoveTo, Replace) can change which file its Delete() removes.
-$otherCalls = @($calls | Where-Object { -not ($_.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $_.Member.Value -eq 'delete') } | ForEach-Object { $_.Expression.VariablePath.UserPath.ToLowerInvariant() })
-foreach ($m in $calls) {
-  if (-not ($m.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $m.Member.Value -eq 'delete')) { continue }
-  $key = $m.Expression.VariablePath.UserPath.ToLowerInvariant()
-  if ($gotItems.ContainsKey($key) -and (InOrder $m) -and $automatic -notcontains $key -and $otherCalls -notcontains $key) {
-    $deleteAt[$gotItems[$key].Extent.StartOffset] = $m.Expression.VariablePath.UserPath
-    [void]$readAtGetItem.Add($m.Extent.StartOffset)
-  }
 }
 
 # A name handed over as text (-OutVariable d, Tee-Object -Variable d, Set-Item variable:d, 'TEMP' handed to
@@ -207,16 +189,6 @@ foreach ($v in $root.FindAll({ param($x) $x -is [System.Management.Automation.La
 }
 
 $items = New-Object System.Collections.ArrayList
-
-function GotDelete($command, $via) {
-  $b = Bound $command
-  if ($b.bindError -or $null -ne $b.path -or $null -ne $b.literalPath) {
-    [void]$items.Add(@{ kind = 'delete'; path = $b.path; literalPath = $b.literalPath; literal = ($null -ne $b.literalPath); dotnet = $false; whatIf = $false; bindError = $b.bindError; inPipeline = $false; ordered = (InOrder $command); via = $via })
-  } else {
-    [void]$items.Add(@{ kind = 'dynamic'; text = $null; args = @() })
-  }
-}
-
 $found = $root.FindAll({
   param($a)
   $a -is [System.Management.Automation.Language.CommandAst] -or
@@ -259,15 +231,15 @@ foreach ($a in $found) {
   if ($a -is [System.Management.Automation.Language.InvokeMemberExpressionAst]) {
     $member = if ($a.Member -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $a.Member.Value.ToLowerInvariant() } else { $null }
     $type = if ($a.Expression -is [System.Management.Automation.Language.TypeExpressionAst]) { $a.Expression.TypeName.FullName.ToLowerInvariant() } else { $null }
-    $on = $a.Expression
-    $instanceDelete = -not $a.Static -and $member -eq 'delete'
-    if ($readAtGetItem.Contains($a.Extent.StartOffset)) { continue }
-    $got = if ($instanceDelete -and $on -is [System.Management.Automation.Language.ParenExpressionAst]) { GetItemOf $on.Pipeline } else { $null }
+    # Only (Get-Item x).Delete() is read: a variable holding the item can be pointed at another file in ways no reading
+    # of the command rules out.
+    $got = if (-not $a.Static -and $member -eq 'delete' -and $a.Expression -is [System.Management.Automation.Language.ParenExpressionAst]) { GetItemOf $a.Expression.Pipeline } else { $null }
+    $b = if ($null -ne $got) { Bound $got } else { $null }
     if ($a.Static -and $member -eq 'delete' -and $dotnet -contains $type) {
       $first = if ($a.Arguments -and $a.Arguments.Count -gt 0) { Value $a.Arguments[0] } else { @{ dynamic = $a.Extent.Text } }
       [void]$items.Add(@{ kind = 'delete'; path = $first; literalPath = $null; literal = $true; dotnet = $true; whatIf = $false; bindError = $false; inPipeline = $false; ordered = (InOrder $a) })
-    } elseif ($null -ne $got) {
-      GotDelete $got $null
+    } elseif ($null -ne $b -and ($b.bindError -or $null -ne $b.path -or $null -ne $b.literalPath)) {
+      [void]$items.Add(@{ kind = 'delete'; path = $b.path; literalPath = $b.literalPath; literal = ($null -ne $b.literalPath); dotnet = $false; whatIf = $false; bindError = $b.bindError; inPipeline = $false; ordered = (InOrder $a) })
     } elseif ($null -eq $member -or ($a.Static -and $null -eq $type) -or $codeMethods -contains $member -or
       ($member -eq 'create' -and $type -match '(^|\.)(scriptblock|powershell)$') -or
       ($member -eq 'start' -and ($type -match '(^|\.)process$' -or ($null -eq $type -and $processStart))) -or
@@ -285,10 +257,6 @@ foreach ($a in $found) {
     } else {
       [void]$items.Add(@{ kind = 'dynamic'; text = $null; args = @() })
     }
-    continue
-  }
-  if ($getItems -contains $name -and $deleteAt.ContainsKey($a.Extent.StartOffset)) {
-    GotDelete $a $deleteAt[$a.Extent.StartOffset]
     continue
   }
   $pipeline = $a.Parent
@@ -419,8 +387,7 @@ function itemOf(raw: unknown): Item {
   if (!isRecord(raw) || typeof raw.kind !== 'string') throw new Error('bad item');
   switch (raw.kind) {
     case 'delete':
-      if (raw.via != null && typeof raw.via !== 'string') throw new Error('bad item');
-      return { kind: 'delete', path: optionalValue(raw.path), literalPath: optionalValue(raw.literalPath), literal: flag(raw.literal), dotnet: flag(raw.dotnet), whatIf: flag(raw.whatIf), bindError: flag(raw.bindError), inPipeline: flag(raw.inPipeline), ordered: flag(raw.ordered), via: typeof raw.via === 'string' ? raw.via : null };
+      return { kind: 'delete', path: optionalValue(raw.path), literalPath: optionalValue(raw.literalPath), literal: flag(raw.literal), dotnet: flag(raw.dotnet), whatIf: flag(raw.whatIf), bindError: flag(raw.bindError), inPipeline: flag(raw.inPipeline), ordered: flag(raw.ordered) };
     case 'call':
       return { kind: 'call', command: valueOf(raw.command), ordered: flag(raw.ordered) };
     case 'cd':
@@ -560,10 +527,6 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
         if ((text === null || !SCRIPT_FILE.test(text)) && DELETE_WORD.test(source) && !out.failed.length) out.failed.push(excerpt);
       } else {
         if (item.whatIf) continue;
-        if (item.via !== null && (anyVariable || unstable.has(baseName(item.via)) || assigned.get(baseName(item.via)) !== 1)) {
-          if (!out.failed.length) out.failed.push(excerpt);
-          continue;
-        }
         if (item.bindError) {
           if (!out.failed.length) out.failed.push(excerpt);
           continue;

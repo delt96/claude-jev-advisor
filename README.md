@@ -102,7 +102,7 @@ With the `mod` display the band's advice is also written to `advice/<session>.js
 It runs before every Bash and PowerShell tool call (`PreToolUse`, matcher `Bash|PowerShell`, 15-second timeout) and looks at:
 
 - Bash: `rm`, `rmdir` and `xargs`
-- PowerShell: `Remove-Item` and its aliases `ri`, `rm`, `del`, `erase`, `rd` and `rmdir`, `[System.IO.File]::Delete` and `[System.IO.Directory]::Delete`, and `Delete()` on what `Get-Item` returned, either directly (`(Get-Item x).Delete()`) or through a variable assigned once at the top level and used for nothing but `Delete()` outside loops and blocks (`$i = Get-Item x; $i.Delete()`), read as the path `Get-Item` was given where it ran, in a command that defines no function or alias. PowerShell's own parser and parameter binder read the command, so aliases, shortened parameter names, positional paths and nested blocks count as PowerShell reads them. PowerShell is started only when the command holds one of these words or a shell name, and takes about 0.3 seconds.
+- PowerShell: `Remove-Item` and its aliases `ri`, `rm`, `del`, `erase`, `rd` and `rmdir`, `[System.IO.File]::Delete` and `[System.IO.Directory]::Delete`, and `Delete()` right on what `Get-Item` returned (`(Get-Item x).Delete()`), read as the path `Get-Item` was given, in a command that defines no function, alias or module and runs no script file. A `Get-Item` result kept in a variable first (`$i = Get-Item x; $i.Delete()`) is not read: the variable can come to hold another file in ways the reader cannot rule out. PowerShell's own parser and parameter binder read the command, so aliases, shortened parameter names, positional paths and nested blocks count as PowerShell reads them. PowerShell is started only when the command holds one of these words or a shell name, and takes about 0.3 seconds.
 - shells started inside a command, up to three levels deep: `sh -c` and `bash -c`, `powershell -Command`, `pwsh -c` and `-EncodedCommand`, and `del`, `erase`, `rd` and `rmdir` in `cmd /c`
 
 | Target | Result |
@@ -115,7 +115,7 @@ It runs before every Bash and PowerShell tool call (`PreToolUse`, matcher `Bash|
 | `Remove-Item … -WhatIf` | No decision |
 | A network path (`\\server\share\…`) | `ask`, without looking the path up |
 | Any other existing file or folder | `ask`, with the reason `실제 파일 삭제: <paths>` ("deleting real files"), unless Jev lifts it (below) |
-| A PowerShell command its parser cannot read (a syntax error, PowerShell not answering within 3 seconds, a nested PowerShell command left when the hook has spent 9 seconds reading, an answer it does not expect), or one that deletes and runs code it cannot follow (`& $name`, unless the name works out to a path ending in `.ps1`, `.bat` or `.cmd` and the command defines no function or alias, which runs like a script written out; `Invoke-Expression`, `Start-Process` or `Set-Alias` with an argument it cannot work out, `[scriptblock]::Create`, `.Invoke()`, a `Delete()` method in a command that gets file objects from `Get-ChildItem`, `New-Item`, `-PassThru` or a `Get-Item` it cannot tie to that `Delete()`), or makes a drive with `New-PSDrive` | `ask`, with the reason `삭제 명령을 분석하지 못함: <start of the command>` ("could not read the delete command"). Jev is not asked. |
+| A PowerShell command its parser cannot read (a syntax error, PowerShell not answering within 3 seconds, a nested PowerShell command left when the hook has spent 9 seconds reading, an answer it does not expect), or one that deletes and runs code it cannot follow (`& $name`, unless the name works out to a path ending in `.ps1`, `.bat` or `.cmd` and the command defines no function, alias or module, which runs like a script written out; `Invoke-Expression`, `Start-Process` or `Set-Alias` with an argument it cannot work out, `[scriptblock]::Create`, `.Invoke()`, a `Delete()` method in a command that gets file objects from `Get-ChildItem`, `New-Item`, `-PassThru` or a `Get-Item` it cannot tie to that `Delete()`), or makes a drive with `New-PSDrive` | `ask`, with the reason `삭제 명령을 분석하지 못함: <start of the command>` ("could not read the delete command"). Jev is not asked. |
 | A target it cannot work out | `deny`, with a hint to rewrite the command using literal paths |
 
 A target cannot be worked out when it uses:
@@ -129,6 +129,8 @@ A target cannot be worked out when it uses:
 - a PowerShell drive other than a drive letter and the non-file drives above, such as one made with `New-PSDrive`
 - a nested shell whose script is not fixed text and holds a delete word, or shells nested more than three deep that delete
 - in `cmd`, a delete on a line that uses `if`, `else`, `for`, `call`, `start` or unquoted parentheses, or starts a command with a name it cannot read: write plain `del` or `rd` lines instead, with names that hold parentheses in double quotes
+
+It is there to catch a deletion made by mistake, not one written to get past it. A command that redefines what a name means (a function named `Remove-Item`, a function, alias or variable written under a name built from pieces, `IFS` set through a name built from pieces) can make it read a different path from the one the shell uses.
 
 It does not see deletions made any other way:
 

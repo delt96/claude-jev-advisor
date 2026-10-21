@@ -136,6 +136,20 @@ test('a variable bash would split into more words, or a literal dollar beside a 
     assert.equal(decision(cmd), 'deny', cmd);
   }
   assert.equal(decision(`T="${SCRATCH}/x y"; rm -rf "$T"`), 'none');
+  assert.equal(decision('D=/tmp; N=\'x y\'; rm -rf $D/"$N"'), 'none');
+  assert.equal(decision('GIFS=/tmp; rm -rf $GIFS/x'), 'none');
+  assert.equal(decision('n=I; read -r "${n}FS" <<< :; S=/tmp/x; rm -rf $S'), 'deny');
+  assert.equal(read('rm -rf "$LOCALAPPDATA/Temp/probe"'), 'none');
+  const bracketed = { LOCALAPPDATA: 'C:/Users/user[0]/AppData/Local' };
+  const glob = decide({ command: 'rm -rf $LOCALAPPDATA/Temp/victim', cwd: PROJECT, home: 'C:\\Users\\me', tmpdirs: ['C:\\Users\\user[0]\\AppData\\Local\\Temp'], env: bracketed, probe });
+  assert.equal(glob?.decision, 'deny');
+});
+
+test('a backslash before a line break joins the lines, as bash reads it', () => {
+  assert.equal(decision('rm -rf "$TEMP/a\\\n/../../outside"'), 'ask');
+  assert.equal(decision('rm -rf "/tmp/a\\\n/../../outside_$$"'), 'deny');
+  assert.equal(decision('rm -rf /tmp/a\\\n/../../outside'), 'ask');
+  assert.equal(decision('rm -rf /tmp/a \\\n  /tmp/b'), 'none');
 });
 
 test('variables that cannot be worked out are denied with a literal-path hint', () => {

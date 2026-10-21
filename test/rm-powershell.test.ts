@@ -288,33 +288,31 @@ test('a script file run by a path that can be worked out is read like one writte
   sources.forEach((source, i) => assert.deepEqual(results[i].failed, [source], source));
 });
 
-test('Delete on what Get-Item returned reads the path Get-Item was given', { skip }, async () => {
+test('Delete right on what Get-Item returned reads the path Get-Item was given', { skip }, async () => {
   const none = { deny: null, targets: [], failed: [], shells: [] };
-  assert.deepEqual(await read(`$j = "${TMP}\\x\\node_modules"; $i = Get-Item $j -Force; $i.LinkType; $i.Delete(); Test-Path $j`), none);
   assert.deepEqual(await read(`(Get-Item "${TMP}\\wt\\node_modules" -Force).Delete()`), none);
+  assert.deepEqual(await read(`$j = "${TMP}\\x\\node_modules"; (Get-Item $j -Force).Delete(); Test-Path $j`), none);
   assert.deepEqual(await shown('(Get-Item C:\\data).Delete($true)'), ['C:\\data']);
-  assert.deepEqual(await shown('$i = gi -LiteralPath C:\\data\\[a].txt; $i.Delete()'), ['C:\\data\\[a].txt']);
-  assert.deepEqual(await shown('$i = Get-Item C:\\data\\*.log; $i.Delete()'), ['C:\\data\\*.log']);
-  assert.deepEqual(await shown('$i = Get-Item a.txt; Set-Location C:\\x; $i.Delete()'), ['C:\\workspace\\proj\\a.txt']);
-  assert.match(await denied(`$i = Get-Item "$W\\x"; $W = "${TMP}"; $i.Delete()`), /a variable that cannot be worked out/);
-  assert.deepEqual(await read(`$i = Get-Item "$env:TEMP\\x"; $env:TEMP = "C:\\data"; $i.Delete()`), none);
-  assert.match(await denied(`$_ = "${TMP}\\x"; Get-ChildItem C:\\data | ForEach-Object { Remove-Item $_ }`), /a variable that cannot be worked out/);
+  assert.deepEqual(await shown('(gi -LiteralPath C:\\data\\[a].txt).Delete()'), ['C:\\data\\[a].txt']);
+  assert.deepEqual(await shown('(Get-Item C:\\data\\*.log).Delete()'), ['C:\\data\\*.log']);
   const sources = [
-    '$i = Get-Item C:\\data\\a.txt; $i = Get-ChildItem C:\\data; $i.Delete()',
-    '$i = Get-Item C:\\data\\a.txt; Set-Variable i (Get-ChildItem C:\\data); $i.Delete()',
-    'foreach ($p in "C:\\data") { $i = Get-Item $p; $i.Delete() }',
-    '$i = Get-Item C:\\data | Select-Object -First 1; $i.Delete()',
-    '$i = Get-ChildItem C:\\data; $i.Delete()',
+    `$i = Get-Item "${TMP}\\x"; $i.Delete()`,
+    '(Get-Item C:\\data | Select-Object -First 1).Delete()',
+    '(Get-ChildItem C:\\data).Delete()',
     '(Get-Item).Delete()',
-    `$_ = Get-Item "${TMP}\\x"; Get-Item C:\\data\\a.txt | ForEach-Object { $_.Delete() }`,
-    `$args = Get-Item "${TMP}\\x"; function f { $args.Delete() }; f (Get-Item C:\\data\\a.txt)`,
-    `$i = Get-Item "${TMP}\\x"; if ($true) { & { $i.Delete() } }`,
-    `$i = Get-Item "${TMP}\\x"; $i.MoveTo('C:\\data\\a.txt'); $i.Delete()`,
     `function Get-Item { param($Path) Microsoft.PowerShell.Management\\Get-Item C:\\data\\a.txt }; (Get-Item "${TMP}\\x").Delete()`,
-    `Set-Alias gi Get-ChildItem; $i = gi "${TMP}\\x"; $i.Delete()`,
+    `Set-Alias gi Get-ChildItem; (gi "${TMP}\\x").Delete()`,
+    `Set-Item ('Func' + 'tion:Get-Item') { Get-ChildItem C:\\data }; (Get-Item "${TMP}\\x").Delete()`,
+    `& "${TMP}\\setup.ps1"; (Get-Item "${TMP}\\x").Delete()`,
+    `Import-Module "${TMP}\\m.psm1"; (Get-Item "${TMP}\\x").Delete()`,
   ];
   const results = await Promise.all(sources.map((source) => read(source)));
   sources.forEach((source, i) => assert.deepEqual(results[i].failed, [source], source));
+});
+
+test('variables PowerShell fills itself are never read as an earlier assignment', { skip }, async () => {
+  assert.match(await denied(`$_ = "${TMP}\\x"; Get-ChildItem C:\\data | ForEach-Object { Remove-Item $_ }`), /a variable that cannot be worked out/);
+  assert.match(await denied(`$LASTEXITCODE = "${TMP}\\x"; where.exe pwsh > $null; Remove-Item $LASTEXITCODE`), /a variable that cannot be worked out/);
 });
 
 test('a relative .NET Delete path is read in the folder the command started in', { skip }, async () => {
