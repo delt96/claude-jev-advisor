@@ -76,13 +76,13 @@ const EXAMPLES: Record<Shell, { what: string; rules: string; example: string; th
   },
   powershell: {
     what: 'this PowerShell command',
-    rules: 'no variables other than $env:TEMP, $env:TMP, $env:USERPROFILE, $HOME and $PWD, no expressions, script blocks or pipeline input, no wildcards in folder names, and no Set-Location to such a path before it',
+    rules: 'no variables other than $env:TEMP, $env:TMP, $env:USERPROFILE, $env:LOCALAPPDATA, $HOME and $PWD, no expressions, script blocks or pipeline input, no wildcards in folder names, and no Set-Location to such a path before it',
     example: 'Remove-Item -LiteralPath "C:\\full\\path\\file.txt"',
     then: 'delete the printed paths',
   },
   cmd: {
     what: 'this del or rd',
-    rules: 'no variables other than %TEMP%, %TMP%, %USERPROFILE% and %CD%, no wildcards in folder names, and no cd to such a path before it',
+    rules: 'no variables other than %TEMP%, %TMP%, %USERPROFILE%, %LOCALAPPDATA% and %CD%, no wildcards in folder names, and no cd to such a path before it',
     example: 'del /q "C:\\full\\path\\file.txt"',
     then: 'delete the printed paths',
   },

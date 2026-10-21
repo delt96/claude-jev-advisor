@@ -8,7 +8,7 @@ const TMP = 'C:\\Users\\me\\AppData\\Local\\Temp';
 type Options = { cwd?: string | null; exists?: (p: string) => boolean };
 
 function read(line: string, { cwd = PROJECT, exists = () => true }: Options = {}) {
-  const env = { TEMP: TMP, TMP, USERPROFILE: 'C:\\Users\\me' };
+  const env = { TEMP: TMP, TMP, USERPROFILE: 'C:\\Users\\me', LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' };
   return readCmd(line, { cwd, home: 'C:\\Users\\me', tmpdirs: [TMP], env, probe: { exists, isIgnored: () => false } });
 }
 
@@ -28,6 +28,8 @@ test('del, erase, rd and rmdir name the files and folders they delete', () => {
 
 test('temp files, missing files and other commands are left alone', () => {
   assert.deepEqual(shown('del /q %TEMP%\\x.txt'), []);
+  assert.deepEqual(shown('rd /s /q %LOCALAPPDATA%\\Temp\\x'), []);
+  assert.deepEqual(shown('rd /s /q %LOCALAPPDATA%\\Programs\\x'), ['C:\\Users\\me\\AppData\\Local\\Programs\\x']);
   assert.deepEqual(shown(`rd /s /q "${TMP}\\probe"`), []);
   assert.deepEqual(shown('del gone.txt', { exists: () => false }), []);
   assert.deepEqual(shown('echo hi > out.txt'), []);

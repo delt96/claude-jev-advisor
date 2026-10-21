@@ -143,7 +143,7 @@ function classify(word: CmdWord, cwd: string | null, everywhere: boolean, ctx: R
 export function readCmd(line: string, ctx: ReadCtx): ReadResult {
   const out = emptyRead();
   const vars = new Map<string, string>();
-  for (const name of ['TEMP', 'TMP', 'USERPROFILE']) {
+  for (const name of ['TEMP', 'TMP', 'USERPROFILE', 'LOCALAPPDATA']) {
     const value = ctx.env[name];
     if (value) vars.set(name.toLowerCase(), value);
   }

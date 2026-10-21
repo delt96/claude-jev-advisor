@@ -10,7 +10,7 @@ const HEADER_WORDS = new Set(['for', 'select', 'case']);
 const CLOSING_WORDS = new Set(['done', 'fi', 'esac', '}']);
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
 const DECLARERS = new Set(['export', 'readonly', 'declare', 'typeset', 'local']);
-const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE'];
+const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'LOCALAPPDATA'];
 const SHELLS = new Set(['sh', 'bash', 'cmd', 'powershell', 'pwsh']);
 const NATIVE_SHELLS = new Set(['cmd', 'powershell', 'pwsh']);
 const SHELL_WORDS = /\b(?:sh|bash|cmd|powershell|pwsh)(?:\.exe)?\b/i;
@@ -223,10 +223,26 @@ function nativeArg(value: string | null, tmpdir: string): string | null {
   return null;
 }
 
+// Bash fills these with digits and never leaves them empty, so they cannot add a folder step or `..` to a path.
+const DIGITS = /\$\$|\$\{\$\}|\$\{(RANDOM|PPID|BASHPID)\}|\$(RANDOM|PPID|BASHPID)(?![A-Za-z0-9_])/g;
+const ASSUME_REAL: Probe = { exists: () => true, isIgnored: () => false };
+
 function classify(target: WordToken, ctx: Ctx): Classified {
   if (target.brace) return { unresolvable: `brace expansion (${target.value})` };
   const value = expand(target, ctx.vars);
-  if (value === null) return { unresolvable: `a shell variable or command substitution that cannot be worked out (${target.value})` };
+  if (value === null) {
+    const digits = target.value.replace(DIGITS, (m: string, braced?: string, bare?: string) => (ctx.vars.has(braced ?? bare ?? '') ? m : '0'));
+    const guess = digits === target.value ? null : expand({ value: digits, dynamic: true }, ctx.vars);
+    if (guess !== null) {
+      const c = locate(target, guess, { ...ctx, probe: ASSUME_REAL });
+      if (!c.unresolvable && !c.real) return {};
+    }
+    return { unresolvable: `a shell variable or command substitution that cannot be worked out (${target.value})` };
+  }
+  return locate(target, value, ctx);
+}
+
+function locate(target: WordToken, value: string, ctx: Ctx): Classified {
   let w: Word = { ...target, value, dynamic: false };
   let pattern: string | null = null;
   if (target.glob) {

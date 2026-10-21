@@ -14,7 +14,7 @@ function run(command: string, { cwd = PROJECT, exists = () => true, ignored = ()
     exists: (p: string) => { seen.exists.push(p); return exists(p); },
     isIgnored: (p: string) => { seen.ignored.push(p); return ignored(p); },
   };
-  const env = { TEMP: TMP, TMP, HOME: 'C:\\Users\\me', USERPROFILE: 'C:\\Users\\me' };
+  const env = { TEMP: TMP, TMP, HOME: 'C:\\Users\\me', USERPROFILE: 'C:\\Users\\me', LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' };
   const result = decide({ command, cwd, home: 'C:\\Users\\me', tmpdirs: [TMP], env, probe });
   return { result, seen };
 }
@@ -95,6 +95,25 @@ test('well-known environment variables are followed', () => {
   assert.equal(decision('rm -rf $TMP/omb-head'), 'none');
   assert.equal(decision(`cd "$HOME/AppData/Local/Temp/claude/x/scratchpad" && rm -f approver.log`), 'none');
   assert.equal(decision('rm -f $HOME/notes.txt'), 'ask');
+});
+
+test('LOCALAPPDATA is followed like the other well-known variables', () => {
+  assert.equal(decision('rm -rf "$LOCALAPPDATA/Temp/claude/x/scratchpad/chk"'), 'none');
+  assert.equal(decision('rm -rf ${LOCALAPPDATA}/Programs/app'), 'ask');
+  assert.match(reason('rm -rf ${LOCALAPPDATA}/Programs/app'), /C:\\Users\\me\\AppData\\Local\\Programs\\app/);
+});
+
+test('a path that lands in temp whatever digits fill it is left alone', () => {
+  assert.equal(decision('rm -f /tmp/a_$$ /tmp/b_$$'), 'none');
+  assert.equal(decision(`rm -f "${SCRATCH}/run-$RANDOM.log" ${SCRATCH}/p\${PPID}_$BASHPID ${SCRATCH}/q\${$}`), 'none');
+  assert.equal(decision('rm -f /tmp/a_$$*.txt'), 'none');
+});
+
+test('digits that fill a path outside temp, or a path that leaves temp, are still denied', () => {
+  for (const cmd of ['rm -f out_$$.log', 'rm -rf /tmp/$$/../../x', 'rm -rf /tmp/$!', 'rm -rf /tmp/x_${OUT}_$$', 'rm -rf /tmp/$RANDOMX', 'rm -rf /tmp/$(date +%s)']) {
+    assert.equal(decision(cmd), 'deny', cmd);
+  }
+  assert.equal(decision('RANDOM=/c/data; rm -rf /c$RANDOM'), 'ask');
 });
 
 test('variables that cannot be worked out are denied with a literal-path hint', () => {

@@ -9,14 +9,16 @@ export const POWERSHELL_WORDS = /\b(?:remove-item|ri|rm|del|erase|rd|rmdir|sh|ba
 const DELETE_WORD = new RegExp(`${DELETE_WORDS.source}|\\bdelete`, 'i');
 const OTHER_DRIVES = new Set(['alias', 'env', 'function', 'variable', 'hklm', 'hkcu', 'cert', 'wsman']);
 const EXCERPT_CHARS = 200;
-const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE'];
+const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'LOCALAPPDATA'];
+const SCRIPT_FILE = /[\\/][^\\/]+\.(?:ps1|bat|cmd)$/i;
 
 export type PowerShellRunner = (source: string) => Promise<string | null>;
 
 type Part = { const: string } | { variable: string };
 type Value = Part | { expand: Part[]; text: string } | { array: Value[] } | { dynamic: string };
 type Item =
-  | { kind: 'delete'; path: Value | null; literalPath: Value | null; literal: boolean; dotnet: boolean; whatIf: boolean; bindError: boolean; inPipeline: boolean; ordered: boolean }
+  | { kind: 'delete'; path: Value | null; literalPath: Value | null; literal: boolean; dotnet: boolean; whatIf: boolean; bindError: boolean; inPipeline: boolean; ordered: boolean; via: string | null }
+  | { kind: 'call'; command: Value; ordered: boolean }
   | { kind: 'cd'; path: Value | null; literal: boolean; inBlock: boolean }
   | { kind: 'pop' }
   | { kind: 'assign'; name: string; value: Value }
@@ -138,6 +140,24 @@ $fileObjects = ($source -match 'FileInfo|DirectoryInfo|FileSystemInfo') -or @($r
   ($x -is [System.Management.Automation.Language.CommandParameterAst] -and $x.ParameterName.Length -ge 3 -and 'passthru'.StartsWith($x.ParameterName.ToLowerInvariant()))
 }, $true)).Count -gt 0
 $processStart = $source -match 'ProcessStartInfo|Diagnostics\.Process'
+$getItems = @('get-item', 'gi')
+
+function GetItemOf($pipeline) {
+  if (-not ($pipeline -is [System.Management.Automation.Language.PipelineAst]) -or $pipeline.PipelineElements.Count -ne 1) { return $null }
+  $c = $pipeline.PipelineElements[0]
+  if ($c -is [System.Management.Automation.Language.CommandAst] -and $getItems -contains (NameOf $c)) { return $c }
+  return $null
+}
+
+# The reader trusts a variable named here only while it is assigned once; the TypeScript side counts that.
+$gotItems = @{}
+foreach ($s in $root.FindAll({ param($x) $x -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+  $left = $s.Left
+  if (-not ($left -is [System.Management.Automation.Language.VariableExpressionAst]) -or $left.Splatted -or $s.Operator -ne 'Equals' -or -not (TopLevel $s)) { continue }
+  $c = GetItemOf $s.Right
+  $key = $left.VariablePath.UserPath.ToLowerInvariant()
+  if ($null -ne $c -and -not $gotItems.ContainsKey($key)) { $gotItems[$key] = $c }
+}
 
 # A name handed over as text (-OutVariable d, Tee-Object -Variable d, Set-Item variable:d, 'TEMP' handed to
 # SetEnvironmentVariable, '$d = 1' handed to iex) can write a variable without the parser seeing a variable there.
@@ -202,9 +222,25 @@ foreach ($a in $found) {
   if ($a -is [System.Management.Automation.Language.InvokeMemberExpressionAst]) {
     $member = if ($a.Member -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $a.Member.Value.ToLowerInvariant() } else { $null }
     $type = if ($a.Expression -is [System.Management.Automation.Language.TypeExpressionAst]) { $a.Expression.TypeName.FullName.ToLowerInvariant() } else { $null }
+    $got = $null
+    $via = $null
+    if (-not $a.Static -and $member -eq 'delete') {
+      $on = $a.Expression
+      if ($on -is [System.Management.Automation.Language.ParenExpressionAst]) { $got = GetItemOf $on.Pipeline }
+      elseif ($on -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $on.Splatted) {
+        $via = $on.VariablePath.UserPath
+        $got = $gotItems[$via.ToLowerInvariant()]
+      }
+    }
+    $bound = if ($null -ne $got) { Bound $got } else { $null }
     if ($a.Static -and $member -eq 'delete' -and $dotnet -contains $type) {
       $first = if ($a.Arguments -and $a.Arguments.Count -gt 0) { Value $a.Arguments[0] } else { @{ dynamic = $a.Extent.Text } }
       [void]$items.Add(@{ kind = 'delete'; path = $first; literalPath = $null; literal = $true; dotnet = $true; whatIf = $false; bindError = $false; inPipeline = $false; ordered = (InOrder $a) })
+    } elseif ($null -ne $bound -and ($bound.bindError -or $null -ne $bound.path -or $null -ne $bound.literalPath)) {
+      # Get-Item read a relative path where the command stood when the variable was filled, not at Delete(), so a
+      # folder move anywhere in the command leaves it unknown.
+      $ordered = if ($null -eq $via) { InOrder $a } else { $false }
+      [void]$items.Add(@{ kind = 'delete'; path = $bound.path; literalPath = $bound.literalPath; literal = ($null -ne $bound.literalPath); dotnet = $false; whatIf = $false; bindError = $bound.bindError; inPipeline = $false; ordered = $ordered; via = $via })
     } elseif ($null -eq $member -or ($a.Static -and $null -eq $type) -or $codeMethods -contains $member -or
       ($member -eq 'create' -and $type -match '(^|\.)(scriptblock|powershell)$') -or
       ($member -eq 'start' -and ($type -match '(^|\.)process$' -or ($null -eq $type -and $processStart))) -or
@@ -216,7 +252,12 @@ foreach ($a in $found) {
   if ($a.CommandElements[0] -is [System.Management.Automation.Language.ScriptBlockExpressionAst]) { continue }
   $name = NameOf $a
   if ($null -eq $name) {
-    [void]$items.Add(@{ kind = 'dynamic'; text = $null; args = @() })
+    $first = $a.CommandElements[0]
+    if ([string]$a.InvocationOperator -ne 'Unknown' -and ($first -is [System.Management.Automation.Language.ExpandableStringExpressionAst] -or ($first -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $first.Splatted))) {
+      [void]$items.Add(@{ kind = 'call'; command = (Value $first); ordered = (InOrder $a) })
+    } else {
+      [void]$items.Add(@{ kind = 'dynamic'; text = $null; args = @() })
+    }
     continue
   }
   $pipeline = $a.Parent
@@ -347,7 +388,10 @@ function itemOf(raw: unknown): Item {
   if (!isRecord(raw) || typeof raw.kind !== 'string') throw new Error('bad item');
   switch (raw.kind) {
     case 'delete':
-      return { kind: 'delete', path: optionalValue(raw.path), literalPath: optionalValue(raw.literalPath), literal: flag(raw.literal), dotnet: flag(raw.dotnet), whatIf: flag(raw.whatIf), bindError: flag(raw.bindError), inPipeline: flag(raw.inPipeline), ordered: flag(raw.ordered) };
+      if (raw.via != null && typeof raw.via !== 'string') throw new Error('bad item');
+      return { kind: 'delete', path: optionalValue(raw.path), literalPath: optionalValue(raw.literalPath), literal: flag(raw.literal), dotnet: flag(raw.dotnet), whatIf: flag(raw.whatIf), bindError: flag(raw.bindError), inPipeline: flag(raw.inPipeline), ordered: flag(raw.ordered), via: typeof raw.via === 'string' ? raw.via : null };
+    case 'call':
+      return { kind: 'call', command: valueOf(raw.command), ordered: flag(raw.ordered) };
     case 'cd':
       return { kind: 'cd', path: optionalValue(raw.path), literal: flag(raw.literal), inBlock: flag(raw.inBlock) };
     case 'pop':
@@ -478,8 +522,17 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
         const values = item.text === null ? null : item.args.map((a) => textOf(a));
         const code = values === null || values.includes(null) ? source : [item.text, ...values].join(' ');
         if (DELETE_WORD.test(code) && !out.failed.length) out.failed.push(excerpt);
+      } else if (item.kind === 'call') {
+        // A script file named by its path runs like one written out, which the reader does not follow either; any
+        // other name could be a cmdlet, an alias or a shell.
+        const text = textOf(item.command, item.ordered || !moves ? cwd : null);
+        if ((text === null || !SCRIPT_FILE.test(text)) && DELETE_WORD.test(source) && !out.failed.length) out.failed.push(excerpt);
       } else {
         if (item.whatIf) continue;
+        if (item.via !== null && (anyVariable || unstable.has(baseName(item.via)) || assigned.get(baseName(item.via)) !== 1)) {
+          if (!out.failed.length) out.failed.push(excerpt);
+          continue;
+        }
         if (item.bindError) {
           if (!out.failed.length) out.failed.push(excerpt);
           continue;
