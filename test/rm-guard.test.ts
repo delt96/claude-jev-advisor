@@ -103,18 +103,39 @@ test('LOCALAPPDATA is followed like the other well-known variables', () => {
   assert.match(reason('rm -rf ${LOCALAPPDATA}/Programs/app'), /C:\\Users\\me\\AppData\\Local\\Programs\\app/);
 });
 
-test('a path that lands in temp whatever digits fill it is left alone', () => {
-  assert.equal(decision('rm -f /tmp/a_$$ /tmp/b_$$'), 'none');
-  assert.equal(decision(`rm -f "${SCRATCH}/run-$RANDOM.log" ${SCRATCH}/p\${PPID}_$BASHPID ${SCRATCH}/q\${$}`), 'none');
-  assert.equal(decision('rm -f /tmp/a_$$*.txt'), 'none');
+test('a quoted path that lands in temp whatever digits $$ or $PPID hold is left alone', () => {
+  assert.equal(decision('rm -f "/tmp/a_$$" /tmp/"b_${$}"'), 'none');
+  assert.equal(decision(`rm -f "${SCRATCH}/run-$PPID.log" "${SCRATCH}/p\${PPID}_$$"`), 'none');
+  assert.equal(decision('S=/tmp/x; rm -f "$S/a_$$"'), 'none');
+  assert.equal(decision('rm -f "/tmp/a_$$"*.txt'), 'none');
 });
 
-test('digits that fill a path outside temp, or a path that leaves temp, are still denied', () => {
-  for (const cmd of ['rm -f out_$$.log', 'rm -rf /tmp/$$/../../x', 'rm -rf /tmp/$!', 'rm -rf /tmp/x_${OUT}_$$', 'rm -rf /tmp/$RANDOMX', 'rm -rf /tmp/$(date +%s)',
-    'unset RANDOM; rm -rf /tmp/$RANDOM', 'read BASHPID < f; rm -rf /tmp/x${BASHPID}', 'IFS=0123456789; rm -rf /tmp/a$$b']) {
+test('digits that fill a path outside temp, a path that leaves temp, or digits bash can split are still denied', () => {
+  for (const cmd of ['rm -f "out_$$.log"', 'rm -rf "/tmp/$$/../../x"', 'rm -rf "/tmp/$!"', 'rm -rf "/tmp/x_${OUT}_$$"', 'rm -rf "/tmp/$(date +%s)"',
+    'rm -rf "/tmp/$RANDOM"', 'rm -rf "/tmp/x$BASHPID"', 'rm -f /tmp/a_$$', 'IFS=0123456789; rm -rf /tmp/a$$b', "read I'FS' <<< 0123456789; rm -f /tmp/a$$b",
+    "rm -rf '$TEMP/'\"$$\"", 'rm -rf \\$TEMP/"$$"', "p=' /c/data/victim'; rm -rf \"/tmp/$$\"$p"]) {
     assert.equal(decision(cmd), 'deny', cmd);
   }
-  assert.equal(decision('RANDOM=/c/data; rm -rf /c$RANDOM'), 'ask');
+  assert.equal(decision('PPID=/c/data; rm -rf "/c$PPID"'), 'ask');
+});
+
+test('digits never make up the temp folder itself', () => {
+  const tmp = 'C:\\temp0';
+  const probe = { exists: () => true, isIgnored: () => false };
+  const result = decide({ command: 'rm -rf "/c/temp$PPID/victim"', cwd: PROJECT, home: 'C:\\Users\\me', tmpdirs: [tmp], env: { TEMP: tmp }, probe });
+  assert.equal(result?.decision, 'deny');
+});
+
+test('a variable bash would split into more words, or a literal dollar beside a variable, is denied', () => {
+  const spaced = { LOCALAPPDATA: 'C:/Users/John Doe/AppData/Local' };
+  const probe = { exists: () => true, isIgnored: () => false };
+  const read = (command: string) => decide({ command, cwd: PROJECT, home: 'C:\\Users\\me', tmpdirs: ['C:\\Users\\John Doe\\AppData\\Local\\Temp'], env: spaced, probe })?.decision ?? 'none';
+  assert.equal(read('rm -rf $LOCALAPPDATA/Temp/probe'), 'deny');
+  assert.equal(read('rm -rf "$LOCALAPPDATA/Temp/probe"'), 'none');
+  for (const cmd of [`T="${SCRATCH}/x C:/data"; rm -rf $T`, 'IFS=/; S=/tmp/x; rm -rf $S', `S=${SCRATCH}; rm -rf '$HOME'$S`, 'rm -rf $\'C:\\\\data\'', 'rm -rf $"C:/data"']) {
+    assert.equal(decision(cmd), 'deny', cmd);
+  }
+  assert.equal(decision(`T="${SCRATCH}/x y"; rm -rf "$T"`), 'none');
 });
 
 test('variables that cannot be worked out are denied with a literal-path hint', () => {

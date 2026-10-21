@@ -10,6 +10,8 @@ const DELETE_WORD = new RegExp(`${DELETE_WORDS.source}|\\bdelete`, 'i');
 const OTHER_DRIVES = new Set(['alias', 'env', 'function', 'variable', 'hklm', 'hkcu', 'cert', 'wsman']);
 const EXCERPT_CHARS = 200;
 const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'LOCALAPPDATA'];
+// PowerShell fills these itself (a pipeline's $_, a function's $args) without an assignment the reader could see.
+const AUTOMATIC = new Set(['_', 'psitem', 'args', 'input', 'this', 'matches', 'foreach', 'switch', 'event', 'eventargs', 'sender']);
 const SCRIPT_FILE = /[\\/][^\\/]+\.(?:ps1|bat|cmd)$/i;
 
 export type PowerShellRunner = (source: string) => Promise<string | null>;
@@ -141,8 +143,18 @@ $fileObjects = ($source -match 'FileInfo|DirectoryInfo|FileSystemInfo') -or @($r
 }, $true)).Count -gt 0
 $processStart = $source -match 'ProcessStartInfo|Diagnostics\.Process'
 $getItems = @('get-item', 'gi')
+# A function or an alias made in the command can take any name, a path-shaped one included, so no name it uses is
+# trusted to be what it says.
+$redefines = ($source -match 'function:|alias:') -or @($root.FindAll({
+  param($x)
+  $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -or
+  ($x -is [System.Management.Automation.Language.CommandAst] -and @('set-alias', 'sal', 'new-alias', 'nal') -contains (NameOf $x))
+}, $true)).Count -gt 0
+# PowerShell fills these itself, without an assignment the reader could see.
+$automatic = @('_', 'psitem', 'args', 'input', 'this', 'matches', 'foreach', 'switch', 'event', 'eventargs', 'sender')
 
 function GetItemOf($pipeline) {
+  if ($redefines) { return $null }
   if (-not ($pipeline -is [System.Management.Automation.Language.PipelineAst]) -or $pipeline.PipelineElements.Count -ne 1) { return $null }
   $c = $pipeline.PipelineElements[0]
   if ($c -is [System.Management.Automation.Language.CommandAst] -and $getItems -contains (NameOf $c)) { return $c }
@@ -161,9 +173,17 @@ foreach ($s in $root.FindAll({ param($x) $x -is [System.Management.Automation.La
 # Get-Item works out its path where it runs, so a later change to a variable in that path or to the folder must not
 # reach it: such a Delete() is read at its Get-Item, keyed by where that command starts.
 $deleteAt = @{}
-foreach ($m in $root.FindAll({ param($x) $x -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and -not $x.Static -and $x.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $x.Member.Value -eq 'delete' -and $x.Expression -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $x.Expression.Splatted }, $true)) {
+$readAtGetItem = New-Object 'System.Collections.Generic.HashSet[int]'
+$calls = @($root.FindAll({ param($x) $x -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and -not $x.Static -and $x.Expression -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $x.Expression.Splatted }, $true))
+# Any other method on the object (MoveTo, Replace) can change which file its Delete() removes.
+$otherCalls = @($calls | Where-Object { -not ($_.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $_.Member.Value -eq 'delete') } | ForEach-Object { $_.Expression.VariablePath.UserPath.ToLowerInvariant() })
+foreach ($m in $calls) {
+  if (-not ($m.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $m.Member.Value -eq 'delete')) { continue }
   $key = $m.Expression.VariablePath.UserPath.ToLowerInvariant()
-  if ($gotItems.ContainsKey($key)) { $deleteAt[$gotItems[$key].Extent.StartOffset] = $m.Expression.VariablePath.UserPath }
+  if ($gotItems.ContainsKey($key) -and (InOrder $m) -and $automatic -notcontains $key -and $otherCalls -notcontains $key) {
+    $deleteAt[$gotItems[$key].Extent.StartOffset] = $m.Expression.VariablePath.UserPath
+    [void]$readAtGetItem.Add($m.Extent.StartOffset)
+  }
 }
 
 # A name handed over as text (-OutVariable d, Tee-Object -Variable d, Set-Item variable:d, 'TEMP' handed to
@@ -241,7 +261,7 @@ foreach ($a in $found) {
     $type = if ($a.Expression -is [System.Management.Automation.Language.TypeExpressionAst]) { $a.Expression.TypeName.FullName.ToLowerInvariant() } else { $null }
     $on = $a.Expression
     $instanceDelete = -not $a.Static -and $member -eq 'delete'
-    if ($instanceDelete -and $on -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $on.Splatted -and $gotItems.ContainsKey($on.VariablePath.UserPath.ToLowerInvariant())) { continue }
+    if ($readAtGetItem.Contains($a.Extent.StartOffset)) { continue }
     $got = if ($instanceDelete -and $on -is [System.Management.Automation.Language.ParenExpressionAst]) { GetItemOf $on.Pipeline } else { $null }
     if ($a.Static -and $member -eq 'delete' -and $dotnet -contains $type) {
       $first = if ($a.Arguments -and $a.Arguments.Count -gt 0) { Value $a.Arguments[0] } else { @{ dynamic = $a.Extent.Text } }
@@ -260,7 +280,7 @@ foreach ($a in $found) {
   $name = NameOf $a
   if ($null -eq $name) {
     $first = $a.CommandElements[0]
-    if ([string]$a.InvocationOperator -ne 'Unknown' -and ($first -is [System.Management.Automation.Language.ExpandableStringExpressionAst] -or ($first -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $first.Splatted))) {
+    if (-not $redefines -and [string]$a.InvocationOperator -ne 'Unknown' -and ($first -is [System.Management.Automation.Language.ExpandableStringExpressionAst] -or ($first -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $first.Splatted))) {
       [void]$items.Add(@{ kind = 'call'; command = (Value $first); ordered = (InOrder $a) })
     } else {
       [void]$items.Add(@{ kind = 'dynamic'; text = $null; args = @() })
@@ -491,7 +511,7 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
     let cwd = ctx.cwd;
     const variable = (name: string, here: string | null): string | null => {
       const key = baseName(name);
-      if (anyVariable || unstable.has(key)) return null;
+      if (anyVariable || unstable.has(key) || AUTOMATIC.has(key)) return null;
       if (key === 'pwd') return assigned.has('pwd') ? null : here;
       return vars.get(key) ?? null;
     };
