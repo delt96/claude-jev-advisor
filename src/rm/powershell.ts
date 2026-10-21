@@ -9,7 +9,10 @@ export const POWERSHELL_WORDS = /\b(?:remove-item|ri|rm|del|erase|rd|rmdir|sh|ba
 const DELETE_WORD = new RegExp(`${DELETE_WORDS.source}|\\bdelete`, 'i');
 const OTHER_DRIVES = new Set(['alias', 'env', 'function', 'variable', 'hklm', 'hkcu', 'cert', 'wsman']);
 const EXCERPT_CHARS = 200;
-const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE'];
+const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'LOCALAPPDATA'];
+// PowerShell fills these itself (a pipeline's $_, a function's $args) without an assignment the reader could see.
+const AUTOMATIC = new Set(['_', 'psitem', 'args', 'input', 'this', 'matches', 'foreach', 'switch', 'event', 'eventargs', 'sender', 'lastexitcode', 'error', 'myinvocation', 'pscmdlet', 'psboundparameters', 'stacktrace', 'psscriptroot', 'pscommandpath']);
+const SCRIPT_FILE = /[\\/][^\\/]+\.(?:ps1|bat|cmd)$/i;
 
 export type PowerShellRunner = (source: string) => Promise<string | null>;
 
@@ -17,6 +20,7 @@ type Part = { const: string } | { variable: string };
 type Value = Part | { expand: Part[]; text: string } | { array: Value[] } | { dynamic: string };
 type Item =
   | { kind: 'delete'; path: Value | null; literalPath: Value | null; literal: boolean; dotnet: boolean; whatIf: boolean; bindError: boolean; inPipeline: boolean; ordered: boolean }
+  | { kind: 'call'; command: Value; ordered: boolean }
   | { kind: 'cd'; path: Value | null; literal: boolean; inBlock: boolean }
   | { kind: 'pop' }
   | { kind: 'assign'; name: string; value: Value }
@@ -138,6 +142,41 @@ $fileObjects = ($source -match 'FileInfo|DirectoryInfo|FileSystemInfo') -or @($r
   ($x -is [System.Management.Automation.Language.CommandParameterAst] -and $x.ParameterName.Length -ge 3 -and 'passthru'.StartsWith($x.ParameterName.ToLowerInvariant()))
 }, $true)).Count -gt 0
 $processStart = $source -match 'ProcessStartInfo|Diagnostics\.Process'
+$getItems = @('get-item', 'gi')
+# A function, an alias or a module made in the command can take any name, a path-shaped one included, so no name it
+# uses is trusted to be what it says; an item command with a computed path may be writing to function: or alias:.
+$itemCommands = @('set-item', 'si', 'new-item', 'ni', 'copy-item', 'cpi', 'copy', 'cp', 'rename-item', 'rni', 'ren', 'move-item', 'mi', 'mv', 'move')
+function ComputedTarget($command) {
+  $binding = [System.Management.Automation.Language.StaticParameterBinder]::BindCommand($command, $true)
+  if ($binding.BindingExceptions.Count -gt 0) { return $true }
+  foreach ($key in @('Path', 'LiteralPath', 'Destination', 'NewName', 'Name')) {
+    if ($binding.BoundParameters.ContainsKey($key)) {
+      $v = $binding.BoundParameters[$key].Value
+      if ($null -ne $v -and -not (Constant $v)) { return $true }
+    }
+  }
+  return $false
+}
+$redefines = ($source -match 'function:|alias:|using\s+module') -or @($root.FindAll({
+  param($x)
+  if ($x -is [System.Management.Automation.Language.FunctionDefinitionAst]) { return $true }
+  if (-not ($x -is [System.Management.Automation.Language.CommandAst])) { return $false }
+  $n = NameOf $x
+  (@('set-alias', 'sal', 'new-alias', 'nal', 'import-module', 'ipmo') -contains $n) -or ($itemCommands -contains $n -and (ComputedTarget $x))
+}, $true)).Count -gt 0
+# A script the command runs can define a global Get-Item before the one read here.
+$runsScripts = @($root.FindAll({
+  param($x)
+  $x -is [System.Management.Automation.Language.CommandAst] -and ((([string]$x.InvocationOperator -ne 'Unknown') -and $null -eq (NameOf $x)) -or (NameOf $x) -match '\.(ps1|psm1)$')
+}, $true)).Count -gt 0
+
+function GetItemOf($pipeline) {
+  if ($redefines -or $runsScripts) { return $null }
+  if (-not ($pipeline -is [System.Management.Automation.Language.PipelineAst]) -or $pipeline.PipelineElements.Count -ne 1) { return $null }
+  $c = $pipeline.PipelineElements[0]
+  if ($c -is [System.Management.Automation.Language.CommandAst] -and $getItems -contains (NameOf $c)) { return $c }
+  return $null
+}
 
 # A name handed over as text (-OutVariable d, Tee-Object -Variable d, Set-Item variable:d, 'TEMP' handed to
 # SetEnvironmentVariable, '$d = 1' handed to iex) can write a variable without the parser seeing a variable there.
@@ -202,9 +241,15 @@ foreach ($a in $found) {
   if ($a -is [System.Management.Automation.Language.InvokeMemberExpressionAst]) {
     $member = if ($a.Member -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $a.Member.Value.ToLowerInvariant() } else { $null }
     $type = if ($a.Expression -is [System.Management.Automation.Language.TypeExpressionAst]) { $a.Expression.TypeName.FullName.ToLowerInvariant() } else { $null }
+    # Only (Get-Item x).Delete() is read: a variable holding the item can be pointed at another file in ways no reading
+    # of the command rules out.
+    $got = if (-not $a.Static -and $member -eq 'delete' -and $a.Expression -is [System.Management.Automation.Language.ParenExpressionAst]) { GetItemOf $a.Expression.Pipeline } else { $null }
+    $b = if ($null -ne $got) { Bound $got } else { $null }
     if ($a.Static -and $member -eq 'delete' -and $dotnet -contains $type) {
       $first = if ($a.Arguments -and $a.Arguments.Count -gt 0) { Value $a.Arguments[0] } else { @{ dynamic = $a.Extent.Text } }
       [void]$items.Add(@{ kind = 'delete'; path = $first; literalPath = $null; literal = $true; dotnet = $true; whatIf = $false; bindError = $false; inPipeline = $false; ordered = (InOrder $a) })
+    } elseif ($null -ne $b -and ($b.bindError -or $null -ne $b.path -or $null -ne $b.literalPath)) {
+      [void]$items.Add(@{ kind = 'delete'; path = $b.path; literalPath = $b.literalPath; literal = ($null -ne $b.literalPath); dotnet = $false; whatIf = $false; bindError = $b.bindError; inPipeline = $false; ordered = (InOrder $a) })
     } elseif ($null -eq $member -or ($a.Static -and $null -eq $type) -or $codeMethods -contains $member -or
       ($member -eq 'create' -and $type -match '(^|\.)(scriptblock|powershell)$') -or
       ($member -eq 'start' -and ($type -match '(^|\.)process$' -or ($null -eq $type -and $processStart))) -or
@@ -216,7 +261,12 @@ foreach ($a in $found) {
   if ($a.CommandElements[0] -is [System.Management.Automation.Language.ScriptBlockExpressionAst]) { continue }
   $name = NameOf $a
   if ($null -eq $name) {
-    [void]$items.Add(@{ kind = 'dynamic'; text = $null; args = @() })
+    $first = $a.CommandElements[0]
+    if (-not $redefines -and [string]$a.InvocationOperator -ne 'Unknown' -and ($first -is [System.Management.Automation.Language.ExpandableStringExpressionAst] -or ($first -is [System.Management.Automation.Language.VariableExpressionAst] -and -not $first.Splatted))) {
+      [void]$items.Add(@{ kind = 'call'; command = (Value $first); ordered = (InOrder $a) })
+    } else {
+      [void]$items.Add(@{ kind = 'dynamic'; text = $null; args = @() })
+    }
     continue
   }
   $pipeline = $a.Parent
@@ -348,6 +398,8 @@ function itemOf(raw: unknown): Item {
   switch (raw.kind) {
     case 'delete':
       return { kind: 'delete', path: optionalValue(raw.path), literalPath: optionalValue(raw.literalPath), literal: flag(raw.literal), dotnet: flag(raw.dotnet), whatIf: flag(raw.whatIf), bindError: flag(raw.bindError), inPipeline: flag(raw.inPipeline), ordered: flag(raw.ordered) };
+    case 'call':
+      return { kind: 'call', command: valueOf(raw.command), ordered: flag(raw.ordered) };
     case 'cd':
       return { kind: 'cd', path: optionalValue(raw.path), literal: flag(raw.literal), inBlock: flag(raw.inBlock) };
     case 'pop':
@@ -423,8 +475,12 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
     const { items, unstable, anyVariable } = parse(stdout);
     const assigned = new Map<string, number>();
     for (const item of items) if (item.kind === 'assign') assigned.set(baseName(item.name), (assigned.get(baseName(item.name)) ?? 0) + 1);
-    // A loop, a function or a script block can run after a later folder move, so its relative names follow no move.
-    const moves = items.some((item) => item.kind === 'cd' || item.kind === 'pop');
+    // A loop, a function or a script block can run after a later folder move, so its relative names follow no move. A
+    // script the command runs can move the folder and set any variable, so after it nothing is known, and a loop or
+    // block that may run after it is not read at all.
+    const scripts = items.some((item) => item.kind === 'call');
+    const moves = scripts || items.some((item) => item.kind === 'cd' || item.kind === 'pop');
+    let ranScript = false;
     // .NET reads a relative path in the process's folder, which Set-Location does not change but CurrentDirectory does.
     const processFolder = /CurrentDirectory/i.test(source) ? null : ctx.cwd;
     const vars = new Map<string, string | null>();
@@ -436,7 +492,7 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
     let cwd = ctx.cwd;
     const variable = (name: string, here: string | null): string | null => {
       const key = baseName(name);
-      if (anyVariable || unstable.has(key)) return null;
+      if (anyVariable || ranScript || unstable.has(key) || AUTOMATIC.has(key)) return null;
       if (key === 'pwd') return assigned.has('pwd') ? null : here;
       return vars.get(key) ?? null;
     };
@@ -478,8 +534,19 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
         const values = item.text === null ? null : item.args.map((a) => textOf(a));
         const code = values === null || values.includes(null) ? source : [item.text, ...values].join(' ');
         if (DELETE_WORD.test(code) && !out.failed.length) out.failed.push(excerpt);
+      } else if (item.kind === 'call') {
+        // A script file named by its path runs like one written out, which the reader does not follow either; any
+        // other name could be a cmdlet, an alias or a shell.
+        const text = item.ordered ? textOf(item.command) : null;
+        if ((text === null || !SCRIPT_FILE.test(text)) && DELETE_WORD.test(source) && !out.failed.length) out.failed.push(excerpt);
+        ranScript = true;
+        cwd = null;
       } else {
         if (item.whatIf) continue;
+        if (scripts && !item.ordered) {
+          if (!out.failed.length) out.failed.push(excerpt);
+          continue;
+        }
         if (item.bindError) {
           if (!out.failed.length) out.failed.push(excerpt);
           continue;
@@ -491,7 +558,7 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
           if ('dynamic' in v || 'array' in v) return deny(`an expression that cannot be worked out (${'dynamic' in v ? v.dynamic : 'a nested list'})`);
           const text = textOf(v, here);
           if (text === null) return deny(`a variable that cannot be worked out (${'variable' in v ? `$${v.variable}` : 'expand' in v ? v.text : ''})`);
-          const c = classify(text, item.literal, item.dotnet ? processFolder : here, ctx);
+          const c = classify(text, item.literal, item.dotnet ? (ranScript ? null : processFolder) : here, ctx);
           if (c.unresolvable) return deny(c.unresolvable);
           if (c.real) out.targets.push(c.real);
         }

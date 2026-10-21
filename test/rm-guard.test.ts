@@ -14,7 +14,7 @@ function run(command: string, { cwd = PROJECT, exists = () => true, ignored = ()
     exists: (p: string) => { seen.exists.push(p); return exists(p); },
     isIgnored: (p: string) => { seen.ignored.push(p); return ignored(p); },
   };
-  const env = { TEMP: TMP, TMP, HOME: 'C:\\Users\\me', USERPROFILE: 'C:\\Users\\me' };
+  const env = { TEMP: TMP, TMP, HOME: 'C:\\Users\\me', USERPROFILE: 'C:\\Users\\me', LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' };
   const result = decide({ command, cwd, home: 'C:\\Users\\me', tmpdirs: [TMP], env, probe });
   return { result, seen };
 }
@@ -95,6 +95,67 @@ test('well-known environment variables are followed', () => {
   assert.equal(decision('rm -rf $TMP/omb-head'), 'none');
   assert.equal(decision(`cd "$HOME/AppData/Local/Temp/claude/x/scratchpad" && rm -f approver.log`), 'none');
   assert.equal(decision('rm -f $HOME/notes.txt'), 'ask');
+});
+
+test('LOCALAPPDATA is followed like the other well-known variables', () => {
+  assert.equal(decision('rm -rf "$LOCALAPPDATA/Temp/claude/x/scratchpad/chk"'), 'none');
+  assert.equal(decision('rm -rf ${LOCALAPPDATA}/Programs/app'), 'ask');
+  assert.match(reason('rm -rf ${LOCALAPPDATA}/Programs/app'), /C:\\Users\\me\\AppData\\Local\\Programs\\app/);
+});
+
+test('a quoted path that lands in temp whatever digits $$ or $PPID hold is left alone', () => {
+  assert.equal(decision('rm -f "/tmp/a_$$" /tmp/"b_${$}"'), 'none');
+  assert.equal(decision(`rm -f "${SCRATCH}/run-$PPID.log" "${SCRATCH}/p\${PPID}_$$"`), 'none');
+  assert.equal(decision('S=/tmp/x; rm -f "$S/a_$$"'), 'none');
+  assert.equal(decision('rm -f "/tmp/a_$$"*.txt'), 'none');
+});
+
+test('digits that fill a path outside temp, a path that leaves temp, or digits bash can split are still denied', () => {
+  for (const cmd of ['rm -f "out_$$.log"', 'rm -rf "/tmp/$$/../../x"', 'rm -rf "/tmp/$!"', 'rm -rf "/tmp/x_${OUT}_$$"', 'rm -rf "/tmp/$(date +%s)"',
+    'rm -rf "/tmp/$RANDOM"', 'rm -rf "/tmp/x$BASHPID"', 'rm -f /tmp/a_$$', 'IFS=0123456789; rm -rf /tmp/a$$b', "read I'FS' <<< 0123456789; rm -f /tmp/a$$b",
+    "rm -rf '$TEMP/'\"$$\"", 'rm -rf \\$TEMP/"$$"', "p=' /c/data/victim'; rm -rf \"/tmp/$$\"$p"]) {
+    assert.equal(decision(cmd), 'deny', cmd);
+  }
+  assert.equal(decision('PPID=/c/data; rm -rf "/c$PPID"'), 'ask');
+});
+
+test('digits never make up the temp folder itself', () => {
+  const tmp = 'C:\\temp0';
+  const probe = { exists: () => true, isIgnored: () => false };
+  const result = decide({ command: 'rm -rf "/c/temp$PPID/victim"', cwd: PROJECT, home: 'C:\\Users\\me', tmpdirs: [tmp], env: { TEMP: tmp }, probe });
+  assert.equal(result?.decision, 'deny');
+});
+
+test('a variable bash would split into more words, or a literal dollar beside a variable, is denied', () => {
+  const spaced = { LOCALAPPDATA: 'C:/Users/John Doe/AppData/Local' };
+  const probe = { exists: () => true, isIgnored: () => false };
+  const read = (command: string) => decide({ command, cwd: PROJECT, home: 'C:\\Users\\me', tmpdirs: ['C:\\Users\\John Doe\\AppData\\Local\\Temp'], env: spaced, probe })?.decision ?? 'none';
+  assert.equal(read('rm -rf $LOCALAPPDATA/Temp/probe'), 'deny');
+  assert.equal(read('rm -rf "$LOCALAPPDATA/Temp/probe"'), 'none');
+  for (const cmd of [`T="${SCRATCH}/x C:/data"; rm -rf $T`, 'IFS=/; S=/tmp/x; rm -rf $S', `S=${SCRATCH}; rm -rf '$HOME'$S`, 'rm -rf $\'C:\\\\data\'', 'rm -rf $"C:/data"']) {
+    assert.equal(decision(cmd), 'deny', cmd);
+  }
+  assert.equal(decision(`T="${SCRATCH}/x y"; rm -rf "$T"`), 'none');
+  assert.equal(decision('D=/tmp; N=\'x y\'; rm -rf $D/"$N"'), 'none');
+  assert.equal(decision('GIFS=/tmp; rm -rf $GIFS/x'), 'none');
+  assert.equal(decision('n=I; read -r "${n}FS" <<< :; S=/tmp/x; rm -rf $S'), 'deny');
+  for (const cmd of ['n=IFS; declare "$n=:"; S=/tmp/x; rm -rf $S', 'n=IFS; printf -v "$n" :; S=/tmp/x; rm -rf $S', 'eval "$x"; S=/tmp/x; rm -rf $S', '. ./env.sh; S=/tmp/x; rm -rf $S']) {
+    assert.equal(decision(cmd), 'deny', cmd);
+  }
+  for (const cmd of ['export S="$TEMP/x"; rm -rf $S', 'S=/tmp/x; printf "%s\\n" "$S"; rm -rf $S', 'S=/tmp/x; read -r -p "$S? " ok; rm -rf $S', 'local S=/tmp/x; rm -rf $S']) {
+    assert.equal(decision(cmd), 'none', cmd);
+  }
+  assert.equal(read('rm -rf "$LOCALAPPDATA/Temp/probe"'), 'none');
+  const bracketed = { LOCALAPPDATA: 'C:/Users/user[0]/AppData/Local' };
+  const glob = decide({ command: 'rm -rf $LOCALAPPDATA/Temp/victim', cwd: PROJECT, home: 'C:\\Users\\me', tmpdirs: ['C:\\Users\\user[0]\\AppData\\Local\\Temp'], env: bracketed, probe });
+  assert.equal(glob?.decision, 'deny');
+});
+
+test('a backslash before a line break joins the lines, as bash reads it', () => {
+  assert.equal(decision('rm -rf "$TEMP/a\\\n/../../outside"'), 'ask');
+  assert.equal(decision('rm -rf "/tmp/a\\\n/../../outside_$$"'), 'deny');
+  assert.equal(decision('rm -rf /tmp/a\\\n/../../outside'), 'ask');
+  assert.equal(decision('rm -rf /tmp/a \\\n  /tmp/b'), 'none');
 });
 
 test('variables that cannot be worked out are denied with a literal-path hint', () => {

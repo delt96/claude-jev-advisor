@@ -10,12 +10,21 @@ const HEADER_WORDS = new Set(['for', 'select', 'case']);
 const CLOSING_WORDS = new Set(['done', 'fi', 'esac', '}']);
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
 const DECLARERS = new Set(['export', 'readonly', 'declare', 'typeset', 'local']);
-const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE'];
+const KNOWN_ENV = ['TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'LOCALAPPDATA'];
 const SHELLS = new Set(['sh', 'bash', 'cmd', 'powershell', 'pwsh']);
 const NATIVE_SHELLS = new Set(['cmd', 'powershell', 'pwsh']);
 const SHELL_WORDS = /\b(?:sh|bash|cmd|powershell|pwsh)(?:\.exe)?\b/i;
+// Marks an expansion inside double quotes, which bash neither splits into more words nor expands as a wildcard.
+const QUOTED = '\u0002';
+const plain = (value: string) => value.split(QUOTED).join('');
+const NAME_SETTERS = new Set(['declare', 'typeset', 'local', 'export', 'readonly', 'let', 'unset']);
+const NAME_READERS = new Set(['read', 'mapfile', 'readarray']);
+// Options of read and mapfile that take a value rather than a variable name.
+const VALUE_OPTIONS = /^-[pdntuNCOs]$/;
 
-type Word = { value: string; dynamic: boolean; glob: boolean; tilde: boolean; brace: boolean };
+// literal: a $ that bash keeps as text (quoted, escaped or alone), which expand must not read as a variable.
+type Word = { value: string; dynamic: boolean; glob: boolean; tilde: boolean; brace: boolean; literal: boolean };
+type Expandable = Pick<Word, 'value' | 'dynamic'> & Partial<Pick<Word, 'literal'>>;
 type WordToken = Word & { type: 'word' };
 type Token = WordToken | { type: 'op'; value: string } | { type: 'here' };
 type Command = { words: WordToken[]; after: string | null; here: boolean };
@@ -31,7 +40,7 @@ export type DecideInput = {
   env?: Record<string, string | undefined>;
   probe: Probe;
 };
-type Ctx = { cwd: string | null; home: string; tmpdirs: string[]; probe: Probe; vars: Vars };
+type Ctx = { cwd: string | null; home: string; tmpdirs: string[]; probe: Probe; vars: Vars; ifs: boolean };
 
 export function stripHeredocs(text: string): string {
   const out: string[] = [];
@@ -53,7 +62,7 @@ function tokenize(text: string): Token[] {
   let i = 0;
   let word = null as Word | null;
   let skipNextWord = false;
-  const start = (): Word => (word ??= { value: '', dynamic: false, glob: false, tilde: false, brace: false });
+  const start = (): Word => (word ??= { value: '', dynamic: false, glob: false, tilde: false, brace: false, literal: false });
   const finish = () => {
     if (word === null) return;
     if (skipNextWord) skipNextWord = false;
@@ -69,14 +78,19 @@ function tokenize(text: string): Token[] {
     }
     return text.slice(from);
   };
-  const readDollar = () => {
+  const readDollar = (quoted: boolean) => {
     const w = start();
+    const was = w.dynamic;
+    const mark = quoted ? QUOTED : '';
     w.dynamic = true;
-    if (text[i + 1] === '(') { w.value += '$'; i++; w.value += readBalanced('(', ')'); return; }
-    if (text[i + 1] === '{') { w.value += '$'; i++; w.value += readBalanced('{', '}'); return; }
+    if (text[i + 1] === '(') { w.value += `${mark}$`; i++; w.value += readBalanced('(', ')'); return; }
+    if (text[i + 1] === '{') { w.value += `${mark}$`; i++; w.value += readBalanced('{', '}'); return; }
     const m = /^\$([A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])/.exec(text.slice(i));
-    if (m) { w.value += m[0]; i += m[0].length; return; }
-    w.dynamic = false;
+    if (m) { w.value += mark + m[0]; i += m[0].length; return; }
+    // $'...' and $"..." are quoting forms whose text this reader does not decode, so the word stays unreadable.
+    if (!quoted && (text[i + 1] === "'" || text[i + 1] === '"')) { w.literal = true; w.value += '$'; i++; return; }
+    w.dynamic = was;
+    w.literal = true;
     w.value += '$';
     i++;
   };
@@ -87,7 +101,10 @@ function tokenize(text: string): Token[] {
     if (c === '#' && word === null) { while (i < text.length && text[i] !== '\n') i++; continue; }
     if (c === "'") {
       const end = text.indexOf("'", i + 1);
-      start().value += text.slice(i + 1, end === -1 ? text.length : end);
+      const quoted = text.slice(i + 1, end === -1 ? text.length : end);
+      const w = start();
+      w.value += quoted;
+      if (quoted.includes('$')) w.literal = true;
       i = end === -1 ? text.length : end + 1;
       continue;
     }
@@ -95,16 +112,26 @@ function tokenize(text: string): Token[] {
       const w = start();
       i++;
       while (i < text.length && text[i] !== '"') {
-        if (text[i] === '\\' && '"\\$`'.includes(text[i + 1] ?? '')) { w.value += text[i + 1]; i += 2; continue; }
-        if (text[i] === '$') { readDollar(); continue; }
+        const continued = /^\\\r?\n/.exec(text.slice(i, i + 3));
+        if (continued) { i += continued[0].length; continue; }
+        if (text[i] === '\\' && '"\\$`'.includes(text[i + 1] ?? '')) { if (text[i + 1] === '$') w.literal = true; w.value += text[i + 1]; i += 2; continue; }
+        if (text[i] === '$') { readDollar(true); continue; }
         if (text[i] === '`') { w.dynamic = true; const end = text.indexOf('`', i + 1); w.value += text.slice(i, end === -1 ? text.length : end + 1); i = end === -1 ? text.length : end + 1; continue; }
         w.value += text[i++];
       }
       i++;
       continue;
     }
-    if (c === '\\') { start().value += text[i + 1] ?? ''; i += 2; continue; }
-    if (c === '$') { readDollar(); continue; }
+    if (c === '\\') {
+      const continued = /^\\\r?\n/.exec(text.slice(i, i + 3));
+      if (continued) { i += continued[0].length; continue; }
+      const w = start();
+      if (text[i + 1] === '$') w.literal = true;
+      w.value += text[i + 1] ?? '';
+      i += 2;
+      continue;
+    }
+    if (c === '$') { readDollar(false); continue; }
     if (c === '`') {
       const w = start();
       w.dynamic = true;
@@ -152,20 +179,25 @@ function splitCommands(tokens: Token[]): Command[] {
   return commands;
 }
 
-function expand(word: { value: string; dynamic: boolean }, vars: Vars): string | null {
+// ifs null: an assignment, which bash neither splits nor expands as a wildcard; true: the command may change IFS, so an
+// expansion outside double quotes may split anywhere.
+function expand(word: Expandable, vars: Vars, ifs: boolean | null): string | null {
   if (!word.dynamic) return word.value;
+  if (word.literal) return null;
   let known = true;
-  const out = word.value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m: string, braced?: string, bare?: string) => {
+  const pattern = /(\u0002?)\$\{([A-Za-z_][A-Za-z0-9_]*)\}|(\u0002?)\$([A-Za-z_][A-Za-z0-9_]*)/g;
+  const out = word.value.replace(pattern, (m: string, q1: string, braced: string | undefined, q2: string | undefined, bare: string | undefined) => {
     const v = vars.get(braced ?? bare ?? '');
-    if (typeof v !== 'string') { known = false; return m; }
+    const unquoted = ifs !== null && !(q1 || q2);
+    if (typeof v !== 'string' || (unquoted && (ifs || /[\s*?[]/.test(v)))) { known = false; return m; }
     return v;
   });
-  return known && !/[$`]/.test(out) ? out : null;
+  return known && !/[$`\u0002]/.test(out) ? out : null;
 }
 
 function assign(word: Word, vars: Vars, home: string): void {
   const name = ASSIGNMENT.exec(word.value)![1];
-  let value = expand({ value: word.value.slice(name.length + 1), dynamic: word.dynamic }, vars);
+  let value = expand({ value: word.value.slice(name.length + 1), dynamic: word.dynamic, literal: word.literal }, vars, null);
   if (value !== null && /^~(?:[\\/]|$)/.test(value)) value = home + value.slice(1);
   vars.set(name, value);
 }
@@ -223,22 +255,66 @@ function nativeArg(value: string | null, tmpdir: string): string | null {
   return null;
 }
 
+const ASSUME_REAL: Probe = { exists: () => true, isIgnored: () => false };
+
+// $$ and the read-only PPID always hold digits and are never empty, so inside double quotes they cannot add a folder
+// step, a `..` or a second word. RANDOM and BASHPID lose that once unset, which a command can do by a name it builds.
+const DIGITS = /\u0002(?:\$\$|\$\{\$\}|\$\{(PPID)\}|\$(PPID)(?![A-Za-z0-9_]))/g;
+// Stands in for the digits: it occurs in no real folder name, so the digits can never make up the temp folder itself.
+const NO_FOLDER_CHAR = '\u0001';
+
 function classify(target: WordToken, ctx: Ctx): Classified {
-  if (target.brace) return { unresolvable: `brace expansion (${target.value})` };
-  const value = expand(target, ctx.vars);
-  if (value === null) return { unresolvable: `a shell variable or command substitution that cannot be worked out (${target.value})` };
+  if (target.brace) return { unresolvable: `brace expansion (${plain(target.value)})` };
+  const value = expand(target, ctx.vars, ctx.ifs);
+  if (value === null) {
+    const digits = target.value.replace(DIGITS, (m: string, braced?: string, bare?: string) => (ctx.vars.has(braced ?? bare ?? '') ? m : NO_FOLDER_CHAR));
+    const guess = digits === target.value ? null : expand({ ...target, value: digits }, ctx.vars, ctx.ifs);
+    if (guess !== null) {
+      const c = locate(target, guess, { ...ctx, probe: ASSUME_REAL });
+      if (!c.unresolvable && !c.real) return {};
+    }
+    return { unresolvable: `a shell variable or command substitution that cannot be worked out (${plain(target.value)})` };
+  }
+  return locate(target, value, ctx);
+}
+
+function locate(target: WordToken, value: string, ctx: Ctx): Classified {
   let w: Word = { ...target, value, dynamic: false };
   let pattern: string | null = null;
   if (target.glob) {
     const split = splitWindowsPattern(value, /[*?[]/);
-    if (split === null) return { unresolvable: `a wildcard in a folder name (${target.value})` };
+    if (split === null) return { unresolvable: `a wildcard in a folder name (${plain(target.value)})` };
     pattern = split.pattern;
     w = { ...w, value: split.dir };
   }
   const resolved = toWindowsPath(w, ctx.cwd, ctx.home, ctx.tmpdirs[0]);
   if (resolved.unresolvable) return { unresolvable: resolved.unresolvable };
-  if (resolved.unknown) return { real: { shown: target.value, path: null } };
+  if (resolved.unknown) return { real: { shown: plain(target.value), path: null } };
   return { real: judgePath(resolved.path!, pattern, ctx) ?? undefined };
+}
+
+// A command that sets a variable by a name built while it runs, or runs code the reader does not see, may set IFS.
+function setsBuiltName(commands: Command[]): boolean {
+  const built = (w: WordToken) => w.dynamic && /[$`]/.test(w.value.split('=')[0]);
+  for (const { words } of commands) {
+    const rest = stripPrefixes(words);
+    if (!rest.length) continue;
+    const name = commandName(rest[0]);
+    const args = rest.slice(1);
+    if (name === null || name === 'eval' || name === 'source' || name === '.') return true;
+    if (NAME_SETTERS.has(name) && args.some(built)) return true;
+    if (NAME_READERS.has(name)) {
+      for (let k = 0; k < args.length; k++) {
+        if (!args[k].dynamic && VALUE_OPTIONS.test(args[k].value)) k++;
+        else if (!(!args[k].dynamic && args[k].value.startsWith('-')) && built(args[k])) return true;
+      }
+    }
+    if (name === 'printf') {
+      const v = args.findIndex((w) => !w.dynamic && w.value === '-v');
+      if (v >= 0 && args[v + 1] && built(args[v + 1])) return true;
+    }
+  }
+  return false;
 }
 
 export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: ReadCtx): ReadResult {
@@ -246,7 +322,7 @@ export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: Re
   if (!/\b(?:rm|rmdir|xargs)\b/.test(command) && !SHELL_WORDS.test(command)) return out;
   const commands = splitCommands(tokenize(stripHeredocs(command)));
   const vars: Vars = new Map(KNOWN_ENV.filter((n) => env[n]).map((n): [string, string] => [n, env[n] as string]));
-  const ctx: Ctx = { cwd, home, tmpdirs, probe, vars };
+  const ctx: Ctx = { cwd, home, tmpdirs, probe, vars, ifs: /\bIFS\b/.test(command.replace(/['"\\]/g, '')) || setsBuiltName(commands) };
   const setCwd = (next: string | null) => { ctx.cwd = next; vars.set('PWD', next); };
   const deny = (why: string): ReadResult => ({ ...out, deny: denyReason('bash', why) });
   setCwd(cwd);
@@ -264,16 +340,16 @@ export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: Re
         for (const w of rest.slice(1)) if (ASSIGNMENT.test(w.value)) assign(w, vars, home);
       } else if (name === 'cd' || name === 'pushd' || name === 'popd') {
         const arg = rest[1];
-        const value = arg ? expand(arg, vars) : null;
+        const value = arg ? expand(arg, vars, ctx.ifs) : null;
         if (name === 'popd' || (arg && (value === null || value === '-'))) setCwd(null);
         else if (!arg) setCwd(home);
         else setCwd(toWindowsPath({ ...arg, value: value as string }, ctx.cwd, home, tmpdirs[0]).path ?? null);
       } else if (name === 'xargs') {
         if (rest.slice(1).some((t) => { const n = commandName(t); return n === 'rm' || n === 'rmdir'; })) return deny('xargs feeding rm');
-        if (rest.slice(1).some((t) => SHELLS.has(commandName(t) ?? '')) && DELETE_WORDS.test(rest.slice(1).map((t) => t.value).join(' '))) return deny('xargs feeding a shell that deletes');
+        if (rest.slice(1).some((t) => SHELLS.has(commandName(t) ?? '')) && DELETE_WORDS.test(rest.slice(1).map((t) => plain(t.value)).join(' '))) return deny('xargs feeding a shell that deletes');
       } else if (name !== null && SHELLS.has(name)) {
-        const args = rest.slice(1).map((t) => (t.brace ? null : expand(t, vars)));
-        out.shells.push({ name, args: NATIVE_SHELLS.has(name) ? args.map((a) => nativeArg(a, tmpdirs[0])) : args, cwd: ctx.cwd, raw: rest.map((t) => t.value).join(' '), ...(piped || here ? { piped: true } : {}) });
+        const args = rest.slice(1).map((t) => (t.brace ? null : expand(t, vars, ctx.ifs)));
+        out.shells.push({ name, args: NATIVE_SHELLS.has(name) ? args.map((a) => nativeArg(a, tmpdirs[0])) : args, cwd: ctx.cwd, raw: rest.map((t) => plain(t.value)).join(' '), ...(piped || here ? { piped: true } : {}) });
       } else if (name === 'rm' || name === 'rmdir') {
         let options = true;
         for (const t of rest.slice(1)) {

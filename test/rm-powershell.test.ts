@@ -10,7 +10,7 @@ const real = realPowerShell(process.env);
 type Options = { cwd?: string | null; exists?: (p: string) => boolean; run?: PowerShellRunner };
 
 function read(source: string, { cwd = PROJECT, exists = () => true, run = real }: Options = {}) {
-  const env = { TEMP: TMP, TMP, USERPROFILE: 'C:\\Users\\me' };
+  const env = { TEMP: TMP, TMP, USERPROFILE: 'C:\\Users\\me', LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' };
   return readPowerShell(source, { cwd, home: 'C:\\Users\\me', tmpdirs: [TMP], env, probe: { exists, isIgnored: () => false } }, run);
 }
 
@@ -250,7 +250,6 @@ test('code handed over in a variable or a pipe, run by a method, or a Delete met
     '$ExecutionContext.InvokeCommand.InvokeScript(\'Remove-Item C:\\data\')',
     '$t = [IO.File]; $t::Delete(\'C:\\data\\a.txt\')',
     '[Diagnostics.Process]::Start(\'cmd\', \'/c rmdir /s /q C:\\data\')',
-    '(Get-Item C:\\data).Delete($true)',
     'Get-ChildItem C:\\data | ForEach-Object Delete',
     'Get-ChildItem C:\\data | ForEach-Object { $_.Delete() }',
     '$f = Copy-Item a.txt C:\\data\\b.txt -PassThru; $f.Delete()',
@@ -265,6 +264,66 @@ test('code handed over in a variable or a pipe, run by a method, or a Delete met
   ].map((source) => `${source}; Remove-Item C:\\data\\a.txt`);
   const plainResults = await Promise.all(plain.map((source) => read(source)));
   plain.forEach((source, i) => assert.deepEqual(plainResults[i], { deny: null, targets: [{ shown: 'C:\\data\\a.txt', path: 'C:\\data\\a.txt' }], failed: [], shells: [] }, source));
+});
+
+test('LOCALAPPDATA is followed like the other well-known variables', { skip }, async () => {
+  assert.deepEqual(await read('Remove-Item -Recurse "$env:LOCALAPPDATA\\Temp\\claude\\x\\chk"'), { deny: null, targets: [], failed: [], shells: [] });
+  assert.deepEqual(await shown('Remove-Item "$env:LOCALAPPDATA\\Programs\\x"'), ['C:\\Users\\me\\AppData\\Local\\Programs\\x']);
+});
+
+test('a script file run by a path that can be worked out is read like one written out', { skip }, async () => {
+  const none = { deny: null, targets: [], failed: [], shells: [] };
+  assert.deepEqual(await read(`$W = "${TMP}\\de03"; Remove-Item -Recurse -Force "$W\\png" -ErrorAction SilentlyContinue; & "$W\\export.ps1" -pptx "$W\\a.pptx"`), none);
+  assert.deepEqual(await read(`$W = "${TMP}\\de03"; Remove-Item "$W\\x"; . "$W\\helpers.ps1"`), none);
+  assert.deepEqual(await read(`$W = "${TMP}\\de03"; Remove-Item "$W\\x"; & $W\\run.cmd`), none);
+  assert.deepEqual(await read('$W = "C:\\tools"; & "$W\\build.bat"; Remove-Item C:\\data\\a.txt'), { deny: null, targets: [{ shown: 'C:\\data\\a.txt', path: 'C:\\data\\a.txt' }], failed: [], shells: [] });
+  const sources = [
+    '$W = "C:\\Windows\\System32"; & "$W\\cmd.exe" /c rd /s /q C:\\data',
+    '& "$x\\export.ps1"; Remove-Item "$env:TEMP\\x"',
+    `foreach ($s in "a") { & "${TMP}\\$s.ps1" }; Remove-Item "$env:TEMP\\x"`,
+    '$c = "Remove-Item"; & "$c"; Remove-Item "$env:TEMP\\x"',
+    'Set-Alias -Name "$env:TEMP\\run.ps1" -Value r`m; & "$env:TEMP\\run.ps1" C:\\data\\a.txt; Remove-Item "$env:TEMP\\x"',
+    'function f { }; & "$env:TEMP\\run.ps1"; Remove-Item "$env:TEMP\\x"',
+  ];
+  const results = await Promise.all(sources.map((source) => read(source)));
+  sources.forEach((source, i) => assert.deepEqual(results[i].failed, [source], source));
+});
+
+test('after a script runs, the variables and the folder it may have changed are not known', { skip }, async () => {
+  assert.match(await denied(`$W = "${TMP}\\d"; . "$W\\config.ps1"; Remove-Item "$W\\package.json"`), /a variable that cannot be worked out/);
+  assert.match(await denied(`$W = "${TMP}\\d"; & "$W\\move.ps1"; Remove-Item package.json`), /a path relative to a folder that cannot be worked out/);
+  assert.match(await denied(`$W = "${TMP}\\d"; & "$W\\a.ps1"; Remove-Item "$env:TEMP\\x"`), /a variable that cannot be worked out/);
+  assert.deepEqual((await read(`$W = "${TMP}\\d"; foreach ($n in 1, 2) { Remove-Item "$W\\x"; & "$W\\s.ps1" }`)).failed.length, 1);
+});
+
+test('Delete right on what Get-Item returned reads the path Get-Item was given', { skip }, async () => {
+  const none = { deny: null, targets: [], failed: [], shells: [] };
+  assert.deepEqual(await read(`(Get-Item "${TMP}\\wt\\node_modules" -Force).Delete()`), none);
+  assert.deepEqual(await read(`$j = "${TMP}\\x\\node_modules"; (Get-Item $j -Force).Delete(); Test-Path $j`), none);
+  assert.deepEqual(await shown('(Get-Item C:\\data).Delete($true)'), ['C:\\data']);
+  assert.deepEqual(await shown('(gi -LiteralPath C:\\data\\[a].txt).Delete()'), ['C:\\data\\[a].txt']);
+  assert.deepEqual(await shown('(Get-Item C:\\data\\*.log).Delete()'), ['C:\\data\\*.log']);
+  assert.deepEqual(await read(`(Get-Item '${TMP}\\x').Delete(); & Write-Host done`), none);
+  assert.deepEqual(await read(`$text = 'content'; New-Item -ItemType File -Path '${TMP}\\new.txt' -Value $text; (Get-Item '${TMP}\\x').Delete()`), none);
+  const sources = [
+    `$i = Get-Item "${TMP}\\x"; $i.Delete()`,
+    '(Get-Item C:\\data | Select-Object -First 1).Delete()',
+    '(Get-ChildItem C:\\data).Delete()',
+    '(Get-Item).Delete()',
+    `function Get-Item { param($Path) Microsoft.PowerShell.Management\\Get-Item C:\\data\\a.txt }; (Get-Item "${TMP}\\x").Delete()`,
+    `Set-Alias gi Get-ChildItem; (gi "${TMP}\\x").Delete()`,
+    `Set-Item ('Func' + 'tion:Get-Item') { Get-ChildItem C:\\data }; (Get-Item "${TMP}\\x").Delete()`,
+    `& "${TMP}\\setup.ps1"; (Get-Item "${TMP}\\x").Delete()`,
+    `Import-Module "${TMP}\\m.psm1"; (Get-Item "${TMP}\\x").Delete()`,
+    `$p = 'Func' + 'tion:Get-Item'; New-Item -Path $p -Value { Get-ChildItem C:\\data }; (Get-Item "${TMP}\\x").Delete()`,
+  ];
+  const results = await Promise.all(sources.map((source) => read(source)));
+  sources.forEach((source, i) => assert.deepEqual(results[i].failed, [source], source));
+});
+
+test('variables PowerShell fills itself are never read as an earlier assignment', { skip }, async () => {
+  assert.match(await denied(`$_ = "${TMP}\\x"; Get-ChildItem C:\\data | ForEach-Object { Remove-Item $_ }`), /a variable that cannot be worked out/);
+  assert.match(await denied(`$LASTEXITCODE = "${TMP}\\x"; where.exe pwsh > $null; Remove-Item $LASTEXITCODE`), /a variable that cannot be worked out/);
 });
 
 test('a relative .NET Delete path is read in the folder the command started in', { skip }, async () => {
