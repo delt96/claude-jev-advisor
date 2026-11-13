@@ -419,3 +419,65 @@ test('a named file counts as a copy only when the command just reads it', WINDOW
     cleanup(root);
   }
 });
+
+function copyFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-copy-'));
+  const dirs = { vault: path.join(root, 'vault'), other: path.join(root, 'other'), repo: path.join(root, 'repo') };
+  for (const d of Object.values(dirs)) {
+    fs.mkdirSync(d);
+    fs.writeFileSync(path.join(d, 'n.md'), 'note\n');
+  }
+  const nogit: GitRunner = () => ({ status: 128, stdout: '', stderr: 'fatal: not a git repository' });
+  const s = (p: string) => p.replace(/\\/g, '/');
+  const lift = (command: string, cwd = root) => recoverTargets([path.join(dirs.vault, 'n.md')], command, cwd, 'C:\\Users\\me', () => false, nogit)[0].lift;
+  return { root, ...dirs, s, lift };
+}
+
+test('Copy-Item and cp with a named parameter we do not know give no read positions', WINDOWS_ONLY, () => {
+  const { root, other, repo, vault, s, lift } = copyFixture();
+  const rm = `Remove-Item "${s(vault)}/n.md"`;
+  try {
+    assert.equal(lift(`${rm}; Copy-Item "${s(repo)}/n.md" "${s(other)}/n.md" -ErrorAction Stop`), null);
+    assert.equal(lift(`${rm}; cp "${s(repo)}/n.md" "${s(other)}/n.md" -EA SilentlyContinue`), null);
+    assert.equal(lift(`${rm}; Copy-Item -Destination:"${s(other)}/n.md" "${s(repo)}/n.md"`), null);
+    assert.equal(lift(`${rm}; Copy-Item -Desti "${s(other)}/n.md" "${s(repo)}/n.md"`), null);
+    assert.equal(lift(`${rm}; Copy-Item "${s(repo)}/n.md" "${s(root)}/x.md" -Force`), 'copy');
+    assert.equal(lift(`${rm}; cp -f "${s(repo)}/n.md" "${s(root)}/x.md"`), 'copy');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('a slashless mention in a write position disqualifies the file in the current folder', WINDOWS_ONLY, () => {
+  const { root, other, repo, vault, s, lift } = copyFixture();
+  try {
+    assert.equal(lift(`rm "${s(vault)}/n.md"; cat "${s(other)}/n.md"; echo x > n.md`, other), null);
+    assert.equal(lift(`rm "${s(vault)}/n.md"; cat "${s(other)}/n.md"`, other), 'copy');
+    assert.equal(lift(`cd "${s(other)}"; rm "${s(vault)}/n.md"; cat "${s(repo)}/n.md"`), null);
+    assert.equal(lift(`Set-Location "${s(other)}"; Remove-Item "${s(vault)}/n.md"; cat "${s(repo)}/n.md"`), null);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('certutil operands read only with -hashfile', WINDOWS_ONLY, () => {
+  const { root, other, repo, vault, s, lift } = copyFixture();
+  const rm = `rm "${s(vault)}/n.md"`;
+  try {
+    assert.equal(lift(`${rm}; certutil -f -decode "${s(repo)}/n.md" "${s(other)}/n.md"`), null);
+    assert.equal(lift(`${rm}; certutil -urlcache -f http://x.y/z "${s(other)}/n.md"`), null);
+    assert.equal(lift(`${rm}; certutil -hashfile "${s(repo)}/n.md" SHA256`), 'copy');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('a name=path assignment disqualifies the path', WINDOWS_ONLY, () => {
+  const { root, other, vault, s, lift } = copyFixture();
+  try {
+    assert.equal(lift(`p=${s(other)}/n.md; rm "${s(vault)}/n.md"; cat "${s(other)}/n.md"; echo x > "$p"`), null);
+    assert.equal(lift(`p="${s(other)}/n.md"; rm "${s(vault)}/n.md"; cat "${s(other)}/n.md"; echo x > "$p"`), null);
+  } finally {
+    cleanup(root);
+  }
+});

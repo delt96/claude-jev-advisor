@@ -38,7 +38,11 @@ export function namedPaths(command: string, cwd: string, home: string): string[]
 type Mention = { text: string; path: string | null; redirected: boolean };
 
 const COPY_COMMANDS = new Set(['cp', 'copy', 'copy-item', 'cpi', 'xcopy']);
-const READ_COMMANDS = new Set(['diff', 'fc', 'cmp', 'cat', 'type', 'get-content', 'gc', 'compare-object', 'get-filehash', 'sha256sum', 'md5sum', 'certutil']);
+const READ_COMMANDS = new Set(['diff', 'fc', 'cmp', 'cat', 'type', 'get-content', 'gc', 'compare-object', 'get-filehash', 'sha256sum', 'md5sum']);
+
+const PS_SWITCHES = /^-(?:force|recurse|container|passthru|whatif|confirm)$/i;
+const CP_FLAGS = /^(?:-[frpavniuRdPHLx]+|--(?:force|recursive|preserve(?:=\S+)?|verbose|no-clobber|update|interactive|archive|dereference|no-dereference))$/;
+const DIRECTORY_CHANGERS = new Set(['cd', 'chdir', 'sl', 'set-location', 'pushd']);
 
 function splitStatements(command: string): string[] {
   const out: string[] = [];
@@ -81,33 +85,51 @@ function readWords(words: Mention[]): Set<Mention> {
   } else if (COPY_COMMANDS.has(name)) {
     let named = false;
     let targetDir = false;
+    let unknown = false;
     const sources: Mention[] = [];
     const positional: Mention[] = [];
     for (let i = 0; i < rest.length; i++) {
       const text = rest[i].text;
-      if (/^-(?:destination|dest|de)$/i.test(text)) {
+      if (/^-destination$/i.test(text)) {
         named = true;
         i++;
-      } else if (/^-(?:path|literalpath|lp)$/i.test(text) && rest[i + 1]) {
+      } else if (/^-(?:path|literalpath)$/i.test(text) && rest[i + 1]) {
         sources.push(rest[++i]);
       } else if (/^(?:-t|--target-directory(?:=.*)?)$/.test(text)) {
         targetDir = true;
         if (!text.includes('=')) i++;
+      } else if (PS_SWITCHES.test(text) || CP_FLAGS.test(text)) {
+        continue;
+      } else if (text.startsWith('-')) {
+        unknown = true;
       } else if (!isOption(text)) {
         positional.push(rest[i]);
       }
     }
-    if (!targetDir) {
+    // A named parameter outside the known set may take a value that looks like an operand, which would shift the destination.
+    if (!targetDir && !unknown) {
       if (named) sources.push(...positional);
       else if (positional.length >= 2) sources.push(...positional.slice(0, -1));
       for (const w of sources) reads.add(w);
     }
   } else if (name === 'fsutil' && rest[0]?.text.toLowerCase() === 'hardlink' && rest[1]?.text.toLowerCase() === 'create') {
     if (rest[3]) reads.add(rest[3]);
+  } else if (name === 'certutil' && rest.some((w) => w.text.toLowerCase() === '-hashfile')) {
+    for (const w of operands) reads.add(w);
   } else if (name === 'mklink' && rest.some((w) => w.text.toLowerCase() === '/h')) {
     if (operands[1]) reads.add(operands[1]);
   }
   return reads;
+}
+
+// Slashless words are resolved too, but only so a write or unknown mention of `n.md` can disqualify the file in the
+// current folder; a `name=path` word is a mention of that path.
+function mentionPath(text: string, cwd: string, home: string): string | null {
+  const assigned = /^[A-Za-z_]\w*=(.+)$/.exec(text);
+  const value = assigned ? assigned[1] : text;
+  const full = resolved(value, cwd, home);
+  if (full !== null || /[\\/]/.test(value) || NOT_LITERAL.test(value) || value.startsWith('-')) return full;
+  return win.resolve(cwd, value);
 }
 
 // Paths the command only reads. A path that is also written, redirected to, or named by a command not known to only
@@ -118,8 +140,9 @@ export function readOnlyPaths(command: string, cwd: string, home: string): Set<s
     const words: Mention[] = [];
     for (const match of statement.matchAll(WORD)) {
       const text = match[1] ?? match[2] ?? match[3] ?? '';
-      words.push({ text, path: resolved(text, cwd, home), redirected: /[<>]\s*$/.test(statement.slice(0, match.index)) });
+      words.push({ text, path: mentionPath(text, cwd, home), redirected: /[<>]\s*$/.test(statement.slice(0, match.index)) });
     }
+    if (DIRECTORY_CHANGERS.has((words[0]?.text ?? '').toLowerCase())) return new Set();
     const reads = readWords(words);
     for (const w of words) {
       if (w.path === null) continue;
@@ -130,7 +153,7 @@ export function readOnlyPaths(command: string, cwd: string, home: string): Set<s
   return new Set([...verdict].filter(([, ok]) => ok).map(([k]) => k));
 }
 
-const withoutCarriageReturns =(data: Buffer) => data.toString('latin1').replace(/\r\n/g, '\n');
+const withoutCarriageReturns = (data: Buffer) => data.toString('latin1').replace(/\r\n/g, '\n');
 
 export function sameContent(a: string, b: string): boolean {
   try {
