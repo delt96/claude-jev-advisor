@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { PS_PARSE_TIMEOUT_MS } from '../src/rm/powershell.js';
 import { READ_BUDGET_MS, runRmHook, type RmHookDeps } from '../src/rm/run.js';
 import { DEFAULT_CONFIG, writeConfig } from '../src/config.js';
+import { logFile } from '../src/context/files.js';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const tempHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cja-rm-'));
@@ -118,4 +119,75 @@ test('the entry decodes a multi-byte character split across stdin chunks', () =>
     assert.equal(r.status, 0, `offset ${offset}`);
     assert.match(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason, /한글/, `offset ${offset}`);
   }
+});
+
+
+const NOW = new Date(2026, 10, 13, 9, 0, 0);
+const records = (home: string): Record<string, any>[] => {
+  const file = logFile(home, NOW);
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+};
+const logged = (home: string, extra: Partial<RmHookDeps> = {}): RmHookDeps => ({ ...deps(home), now: () => NOW, ...extra });
+
+test('every rm decision is logged once: passed-over targets, an ask and a deny', async () => {
+  const home = tempHome();
+  await runRmHook(bash('rm -f C:/Temp/x.txt'), logged(home));
+  await runRmHook(bash('rm src/a.ts'), logged(home));
+  await runRmHook(bash('rm $X'), logged(home));
+  await runRmHook(bash('ls -la'), logged(home));
+  const [none, ask, deny, ...rest] = records(home);
+  assert.equal(rest.length, 0);
+  assert.equal(none.helper, 'rm');
+  assert.equal(none.event, 'pre_tool_use');
+  assert.equal(none.decision, 'none');
+  assert.deepEqual(none.targets, []);
+  assert.deepEqual(none.skipped, [{ shown: 'C:\\Temp\\x.txt', why: 'temp' }]);
+  assert.equal(ask.decision, 'ask');
+  assert.match(ask.reason, /^실제 파일 삭제: /);
+  assert.deepEqual(ask.targets, [{ shown: 'C:\\workspace\\proj\\src\\a.ts', path: 'C:\\workspace\\proj\\src\\a.ts', lift: null }]);
+  assert.deepEqual(ask.skipped, []);
+  assert.equal(ask.sessionId, null);
+  assert.equal(ask.jev, undefined);
+  assert.equal(deny.decision, 'deny');
+  assert.match(deny.reason, /^rm-guard could not work out/);
+  assert.deepEqual(deny.targets, []);
+});
+
+test('the record keeps the tool use id and agent id when given, and cuts the command and the reason', async () => {
+  const home = tempHome();
+  const long = `rm ${'a'.repeat(3000)}`;
+  await runRmHook(JSON.stringify({ tool_name: 'Bash', tool_input: { command: long }, cwd: 'C:\\workspace\\proj', tool_use_id: 'toolu_1', agent_id: 'a1', session_id: 's1' }), logged(home));
+  await runRmHook(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'rm src/a.ts' }, tool_use_id: 7, agent_id: {} }), logged(home));
+  const [first, second] = records(home);
+  assert.equal(first.toolUseId, 'toolu_1');
+  assert.equal(first.agentId, 'a1');
+  assert.equal(first.sessionId, 's1');
+  assert.equal(first.command.length, 2000);
+  assert.equal(first.reason.length, 500);
+  assert.equal('toolUseId' in second, false);
+  assert.equal('agentId' in second, false);
+});
+
+test('a digit-variable guess never puts its control character into the record', async () => {
+  const home = tempHome();
+  await runRmHook(bash('rm -f "/tmp/a_$$"'), logged(home));
+  const [record] = records(home);
+  assert.equal(record.decision, 'none');
+  assert.equal(record.skipped.length, 1);
+  assert.equal(record.skipped[0].why, 'temp');
+  assert.equal(/[\u0000-\u0008\u000b-\u001f]/.test(record.skipped[0].shown), false);
+});
+
+test('a log that cannot be written never changes the output', async () => {
+  const home = tempHome();
+  fs.mkdirSync(logFile(home, NOW), { recursive: true });
+  const out = await runRmHook(bash('rm src/a.ts'), logged(home));
+  assert.equal(JSON.parse(out!).hookSpecificOutput.permissionDecision, 'ask');
+});
+
+test('the key never reaches the record even when the cut falls inside it', async () => {
+  const home = tempHome();
+  const key = 'ts-test-key-0123456789';
+  await runRmHook(bash(`rm ${'a'.repeat(1990)}${key}`), logged(home, { env: { TEMP: 'C:\\Temp', TYPESAFE_API_KEY: key } }));
+  assert.equal(fs.readFileSync(logFile(home, NOW), 'utf8').includes('ts-test-k'), false);
 });

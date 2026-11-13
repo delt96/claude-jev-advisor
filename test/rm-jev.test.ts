@@ -88,7 +88,10 @@ test('a test file this session made passes when Jev is sure, with a line for the
   assert.equal(log.helper, 'rm');
   assert.equal(log.decision, 'pass');
   assert.equal(log.transcriptPath, transcript);
-  assert.deepEqual(log.targets, [{ path: 'C:\\workspace\\proj\\out.json', shown: 'C:\\workspace\\proj\\out.json', kind: 'session', p: 0.93 }]);
+  assert.deepEqual(log.targets, [{ shown: 'C:\\workspace\\proj\\out.json', path: 'C:\\workspace\\proj\\out.json', lift: 'jev', kind: 'session', p: 0.93 }]);
+  assert.deepEqual(log.skipped, []);
+  assert.equal(log.reason, undefined);
+  assert.equal(log.jev.length, 1);
   assert.equal(JSON.stringify(log).includes('ts-test-key'), false);
 });
 
@@ -120,6 +123,8 @@ test('when Jev is not sure, or fails, the ask stays and says what Jev thought', 
   const down = JSON.parse((await runRmHook(input(transcript, 'rm -f out.json'), deps(home, failing))) ?? '');
   assert.match(down.hookSpecificOutput.permissionDecisionReason, / · Jev: 판단 못 함$/);
   assert.deepEqual(logLines(home).map((l) => l.decision), ['ask', 'ask']);
+  assert.deepEqual(logLines(home).map((l) => l.targets[0].p), [0.42, null]);
+  assert.deepEqual(logLines(home).map((l) => l.targets[0].lift), [null, null]);
 });
 
 test('Jev is not asked about tracked files, files made before the session, files no call of this session names, or several targets with one of those', async () => {
@@ -137,7 +142,9 @@ test('Jev is not asked about tracked files, files made before the session, files
     assert.doesNotMatch(out.hookSpecificOutput.permissionDecisionReason, /Jev/, command);
   }
   assert.equal(bodies.length, 0);
-  assert.equal(fs.existsSync(path.join(dataDir(home), 'log')), false);
+  const lines = logLines(home);
+  assert.equal(lines.length, cases.length);
+  assert.equal(lines.every((l) => l.decision === 'ask' && l.jev === undefined && l.targets.every((t: { lift: unknown }) => t.lift === null)), true);
 });
 
 test('without a key, a transcript, or with rm Jev switched off, the guard decides alone', async () => {

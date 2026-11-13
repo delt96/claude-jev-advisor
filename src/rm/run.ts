@@ -6,7 +6,7 @@ import { decideTool } from './dispatch.js';
 import { candidateKind, gatherFacts, readSessionLog, realFactProbe, type Candidate, type FactProbe, type TargetFacts } from './facts.js';
 import { askNote, lifts, passMessage, rmJevRequest, type JudgedTarget } from './judge.js';
 import { realPowerShell, type PowerShellRunner } from './powershell.js';
-import { hookOutput, type Probe, type RmTarget } from './targets.js';
+import { hookOutput, type Probe, type RmTarget, type Skipped } from './targets.js';
 
 export type RmHookDeps = {
   home: string;
@@ -21,6 +21,8 @@ export type RmHookDeps = {
 };
 
 export const MAX_JEV_TARGETS = 5;
+export const RM_LOG_COMMAND_CHARS = 2000;
+export const RM_LOG_REASON_CHARS = 500;
 // Claude Code lets the tool call run when a PreToolUse hook passes its 15-second limit, which would drop the ask: no
 // PowerShell read starts after READ_BUDGET_MS (one already running ends within its 3-second limit) and leaves the
 // command unread, and the Jev path gives up well before the limit and leaves the ask.
@@ -35,7 +37,11 @@ type HookInput = {
   cwd?: unknown;
   session_id?: unknown;
   transcript_path?: unknown;
+  tool_use_id?: unknown;
+  agent_id?: unknown;
 };
+export type RmLogTarget = { shown: string; path: string | null; lift: 'git' | 'copy' | 'jev' | null; copy?: string; note?: string; kind?: Candidate; p?: number | null };
+type LogDecision = { decision: 'none' | 'ask' | 'deny' | 'pass'; reason?: string; targets: RmLogTarget[]; jev?: Record<string, unknown>[] };
 type Judged = { items: JudgedTarget[]; calls: Record<string, unknown>[] };
 
 async function judgeTargets(targets: RmTarget[], input: HookInput, command: string, key: string, keys: string[], config: Config, deps: RmHookDeps, elapsed: () => number): Promise<Judged | null> {
@@ -70,6 +76,38 @@ async function judgeTargets(targets: RmTarget[], input: HookInput, command: stri
   };
 }
 
+const CONTROL_CHARS = /[\x00-\x08\x0b-\x1f]/g;
+
+// A failing log must not change what the hook prints.
+function logDecision(home: string, at: Date, input: HookInput, tool: string, command: string, cwd: string, keys: string[], skipped: Skipped[], d: LogDecision): void {
+  try {
+    const clean = (text: string) => text.replace(CONTROL_CHARS, '');
+    // Redact before cutting: a cut inside a key would leave its start for appendLog to miss.
+    const cut = (text: string, max: number) => withoutKeys(text, keys).slice(0, max);
+    appendLog(
+      home,
+      at,
+      {
+        helper: 'rm',
+        event: 'pre_tool_use',
+        sessionId: typeof input.session_id === 'string' ? input.session_id : null,
+        ...(typeof input.agent_id === 'string' ? { agentId: input.agent_id } : {}),
+        transcriptPath: typeof input.transcript_path === 'string' ? input.transcript_path : null,
+        tool,
+        ...(typeof input.tool_use_id === 'string' ? { toolUseId: input.tool_use_id } : {}),
+        command: cut(command, RM_LOG_COMMAND_CHARS),
+        cwd,
+        decision: d.decision,
+        ...(d.reason === undefined ? {} : { reason: cut(d.reason, RM_LOG_REASON_CHARS) }),
+        targets: d.targets.map((t) => ({ ...t, shown: clean(t.shown) })),
+        skipped: skipped.map((s) => ({ shown: clean(s.shown), why: s.why })),
+        ...(d.jev ? { jev: d.jev } : {}),
+      },
+      keys,
+    );
+  } catch {}
+}
+
 export async function runRmHook(raw: string, deps: RmHookDeps): Promise<string | null> {
   const now = deps.now ?? (() => new Date());
   const started = now().getTime();
@@ -82,15 +120,27 @@ export async function runRmHook(raw: string, deps: RmHookDeps): Promise<string |
   if ((tool !== 'Bash' && tool !== 'PowerShell') || typeof command !== 'string') return null;
   const tmpdirs = [...new Set([deps.tmpdir, deps.env.TEMP, deps.env.TMP].filter((t): t is string => Boolean(t)).map((t) => path.win32.resolve(t)))];
   const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : deps.cwd;
-  const ctx = { cwd, home: deps.home, tmpdirs, env: deps.env, probe: deps.probe };
+  const skipped: Skipped[] = [];
+  const ctx = { cwd, home: deps.home, tmpdirs, env: deps.env, probe: deps.probe, skipped };
+  const keys = jevKeys(deps.env, config.keyFile);
+  const log = (d: LogDecision) => logDecision(deps.home, now(), input, tool, command, cwd, keys, skipped, d);
   const powershell = deps.powershell ?? realPowerShell(deps.env);
   const read: PowerShellRunner = (source) => (now().getTime() - started >= READ_BUDGET_MS ? Promise.resolve(null) : powershell(source));
   const result = await decideTool(tool, command, ctx, read);
-  if (!result) return null;
-  if (result.decision !== 'ask' || !result.targets || !config.rm.jev) return hookOutput(result);
+  if (!result) {
+    if (skipped.length > 0) log({ decision: 'none', targets: [] });
+    return null;
+  }
+  const plain = (): LogDecision => ({ decision: result.decision, reason: result.reason, targets: (result.targets ?? []).map((t) => ({ shown: t.shown, path: t.path, lift: null })) });
+  if (result.decision !== 'ask' || !result.targets || !config.rm.jev) {
+    log(plain());
+    return hookOutput(result);
+  }
   const key = readJevKey(deps.env, config.keyFile);
-  if (!key) return hookOutput(result);
-  const keys = jevKeys(deps.env, config.keyFile);
+  if (!key) {
+    log(plain());
+    return hookOutput(result);
+  }
   // Jev can only lift an ask; any failure on the way leaves the ask exactly as the guard decided it.
   let judged: Judged | null = null;
   try {
@@ -98,27 +148,18 @@ export async function runRmHook(raw: string, deps: RmHookDeps): Promise<string |
   } catch {
     judged = null;
   }
-  if (!judged) return hookOutput(result);
+  if (!judged) {
+    log(plain());
+    return hookOutput(result);
+  }
   const pass = lifts(judged.items, config.rm.throwawayYes);
-  try {
-    appendLog(
-      deps.home,
-      now(),
-      {
-        helper: 'rm',
-        event: 'pre_tool_use',
-        sessionId: typeof input.session_id === 'string' ? input.session_id : null,
-        transcriptPath: input.transcript_path,
-        tool,
-        command,
-        cwd,
-        decision: pass ? 'pass' : 'ask',
-        targets: judged.items,
-        jev: judged.calls,
-      },
-      keys,
-    );
-  } catch {}
+  const asked = pass ? result : { ...result, reason: `${result.reason}${askNote(config.lang, judged.items)}` };
+  log({
+    decision: pass ? 'pass' : 'ask',
+    reason: pass ? undefined : asked.reason,
+    targets: judged.items.map((t) => ({ shown: t.shown, path: t.path, lift: pass ? 'jev' : null, kind: t.kind, p: t.p })),
+    jev: judged.calls,
+  });
   if (pass) return JSON.stringify({ systemMessage: passMessage(config.lang, judged.items) });
-  return hookOutput({ ...result, reason: `${result.reason}${askNote(config.lang, judged.items)}` });
+  return hookOutput(asked);
 }
