@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { PS_PARSE_TIMEOUT_MS } from '../src/rm/powershell.js';
-import { READ_BUDGET_MS, runRmHook, type RmHookDeps } from '../src/rm/run.js';
+import { GIT_TIMEOUT_MS, type GitRunner } from '../src/rm/git.js';
+import { READ_BUDGET_MS, RECOVER_BUDGET_MS, runRmHook, type RmHookDeps } from '../src/rm/run.js';
 import { DEFAULT_CONFIG, writeConfig } from '../src/config.js';
 import { logFile } from '../src/context/files.js';
 
@@ -190,4 +191,93 @@ test('the key never reaches the record even when the cut falls inside it', async
   const key = 'ts-test-key-0123456789';
   await runRmHook(bash(`rm ${'a'.repeat(1990)}${key}`), logged(home, { env: { TEMP: 'C:\\Temp', TYPESAFE_API_KEY: key } }));
   assert.equal(fs.readFileSync(logFile(home, NOW), 'utf8').includes('ts-test-k'), false);
+});
+
+const WINDOWS_ONLY = { skip: process.platform !== 'win32' && 'the rm helper runs on Windows only' };
+const gitIn = (repo: string, ...args: string[]) => {
+  const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-C', repo, ...args], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+};
+function repoWith(files: Record<string, string>): string {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-rmrec-'));
+  gitIn(repo, 'init', '-q', '-b', 'main');
+  for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(repo, name), text);
+  gitIn(repo, 'add', '.');
+  gitIn(repo, 'commit', '-q', '-m', 'init');
+  return repo;
+}
+const slashes = (p: string) => p.replace(/\\/g, '/');
+const recoverDeps = (home: string, extra: Partial<RmHookDeps> = {}): RmHookDeps => ({ ...deps(home), now: () => NOW, ...extra });
+
+test('a tracked unchanged file is deleted without asking, with a line that says it is in git', WINDOWS_ONLY, async () => {
+  const home = tempHome();
+  const repo = repoWith({ 'a.md': 'a\n' });
+  try {
+    const out = await runRmHook(bash(`rm "${slashes(repo)}/a.md"`), recoverDeps(home));
+    assert.deepEqual(JSON.parse(out!), { systemMessage: '[jev-advisor] 되살릴 수 있어 묻지 않고 지웁니다: a.md (git)' });
+    const [record] = records(home);
+    assert.equal(record.decision, 'pass');
+    assert.equal(record.targets[0].lift, 'git');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a changed file still asks and says it changed', WINDOWS_ONLY, async () => {
+  const home = tempHome();
+  const repo = repoWith({ 'a.md': 'a\n' });
+  fs.writeFileSync(path.join(repo, 'a.md'), 'edited\n');
+  try {
+    const out = JSON.parse((await runRmHook(bash(`rm "${slashes(repo)}/a.md"`), recoverDeps(home)))!);
+    const file = path.win32.normalize(`${slashes(repo)}/a.md`);
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'ask');
+    assert.equal(out.hookSpecificOutput.permissionDecisionReason, `실제 파일 삭제: ${file} · 바뀜: a.md`);
+    assert.equal(records(home)[0].targets[0].note, '바뀜: a.md');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a vault file with an identical repository copy named in the command is deleted without asking', WINDOWS_ONLY, async () => {
+  const home = tempHome();
+  const repo = repoWith({ 'n.md': 'note\n' });
+  const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-rmvault-'));
+  fs.writeFileSync(path.join(vault, 'n.md'), 'note\n');
+  try {
+    const out = JSON.parse((await runRmHook(bash(`rm "${slashes(vault)}/n.md" && cp "${slashes(repo)}/n.md" "${slashes(vault)}/n.md"`), recoverDeps(home)))!);
+    assert.match(out.systemMessage, /n\.md \(사본 n\.md\)$/);
+    assert.equal(out.hookSpecificOutput, undefined);
+    assert.equal(records(home)[0].targets[0].lift, 'copy');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
+test('with recoverable switched off the ask is exactly as before', WINDOWS_ONLY, async () => {
+  const home = tempHome();
+  writeConfig(home, { ...DEFAULT_CONFIG, rm: { ...DEFAULT_CONFIG.rm, recoverable: false } });
+  const repo = repoWith({ 'a.md': 'a\n' });
+  try {
+    const out = JSON.parse((await runRmHook(bash(`rm "${slashes(repo)}/a.md"`), recoverDeps(home)))!);
+    assert.equal(out.hookSpecificOutput.permissionDecisionReason, `실제 파일 삭제: ${path.win32.normalize(`${slashes(repo)}/a.md`)}`);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('when recovery runs out of time the rest asks and the hook still answers', async () => {
+  const home = tempHome();
+  let clock = 0;
+  const fakeGit: GitRunner = (args) => {
+    clock += GIT_TIMEOUT_MS;
+    return { status: 0, stdout: args[2] === 'ls-files' ? 'H x\0' : '', stderr: '' };
+  };
+  const names = ['a', 'b', 'c', 'd'].map((n) => `C:/data/${n}.md`);
+  const out = JSON.parse((await runRmHook(bash(`rm ${names.join(' ')}`), recoverDeps(home, { git: fakeGit, now: () => new Date(clock) })))!);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'ask');
+  const reason: string = out.hookSpecificOutput.permissionDecisionReason;
+  assert.match(reason, /C:\\data\\b\.md/);
+  assert.doesNotMatch(reason, /C:\\data\\a\.md/);
+  assert.ok(clock <= RECOVER_BUDGET_MS + GIT_TIMEOUT_MS, `clock ${clock}`);
 });

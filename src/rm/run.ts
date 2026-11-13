@@ -4,9 +4,11 @@ import { appendLog } from '../context/files.js';
 import { JEV_TIMEOUT_MS, callJev, jevKeys, readJevKey, withoutKeys, type FetchFn } from '../jev.js';
 import { decideTool } from './dispatch.js';
 import { candidateKind, gatherFacts, readSessionLog, realFactProbe, type Candidate, type FactProbe, type TargetFacts } from './facts.js';
-import { askNote, lifts, passMessage, rmJevRequest, type JudgedTarget } from './judge.js';
+import { askNote, lifts, noteText, passMessage, recoverMessage, rmJevRequest, type JudgedTarget, type Lifted } from './judge.js';
+import type { GitRunner } from './git.js';
+import { MAX_RECOVER_TARGETS, recoverTargets, type Recovery } from './recover.js';
 import { realPowerShell, type PowerShellRunner } from './powershell.js';
-import { hookOutput, type Probe, type RmTarget, type Skipped } from './targets.js';
+import { askReason, hookOutput, type Probe, type RmTarget, type Skipped } from './targets.js';
 
 export type RmHookDeps = {
   home: string;
@@ -18,6 +20,7 @@ export type RmHookDeps = {
   fetchFn?: FetchFn;
   now?: () => Date;
   powershell?: PowerShellRunner;
+  git?: GitRunner;
 };
 
 export const MAX_JEV_TARGETS = 5;
@@ -29,6 +32,7 @@ export const RM_LOG_REASON_CHARS = 500;
 export const READ_BUDGET_MS = 9000;
 export const FACTS_BUDGET_MS = 5000;
 export const JEV_PATH_BUDGET_MS = 12000;
+export const RECOVER_BUDGET_MS = 8000;
 const MIN_JEV_MS = 1000;
 
 type HookInput = {
@@ -99,7 +103,7 @@ function logDecision(home: string, at: Date, input: HookInput, tool: string, com
         cwd,
         decision: d.decision,
         ...(d.reason === undefined ? {} : { reason: cut(d.reason, RM_LOG_REASON_CHARS) }),
-        targets: d.targets.map((t) => ({ ...t, shown: clean(t.shown) })),
+        targets: d.targets.map((t) => ({ ...t, shown: clean(t.shown), ...(t.note === undefined ? {} : { note: clean(t.note) }), ...(t.copy === undefined ? {} : { copy: clean(t.copy) }) })),
         skipped: skipped.map((s) => ({ shown: clean(s.shown), why: s.why })),
         ...(d.jev ? { jev: d.jev } : {}),
       },
@@ -131,35 +135,66 @@ export async function runRmHook(raw: string, deps: RmHookDeps): Promise<string |
     if (skipped.length > 0) log({ decision: 'none', targets: [] });
     return null;
   }
-  const plain = (): LogDecision => ({ decision: result.decision, reason: result.reason, targets: (result.targets ?? []).map((t) => ({ shown: t.shown, path: t.path, lift: null })) });
-  if (result.decision !== 'ask' || !result.targets || !config.rm.jev) {
-    log(plain());
+  const targets = result.targets ?? [];
+  if (result.decision !== 'ask' || targets.length === 0 || targets.some((t) => t.path === null)) {
+    log({ decision: result.decision, reason: result.reason, targets: targets.map((t) => ({ shown: t.shown, path: t.path, lift: null })) });
     return hookOutput(result);
   }
-  const key = readJevKey(deps.env, config.keyFile);
-  if (!key) {
-    log(plain());
-    return hookOutput(result);
+  const elapsed = () => now().getTime() - started;
+  // Recovery can only lift an ask; a failure anywhere in it leaves the ask as the guard decided it.
+  let recoveries: Recovery[] | null = null;
+  if (config.rm.recoverable && targets.length <= MAX_RECOVER_TARGETS) {
+    try {
+      recoveries = recoverTargets(targets.map((t) => t.path as string), command, cwd, deps.home, () => elapsed() > RECOVER_BUDGET_MS, deps.git);
+    } catch {
+      recoveries = null;
+    }
   }
-  // Jev can only lift an ask; any failure on the way leaves the ask exactly as the guard decided it.
+  const recoveredAt = (i: number): Lifted | null => {
+    const r = recoveries?.[i];
+    if (!r || r.lift === null) return null;
+    return { path: targets[i].path as string, lift: r.lift, ...(r.lift === 'copy' ? { copy: r.copy } : {}) };
+  };
+  const recovered = targets.flatMap((_, i) => recoveredAt(i) ?? []);
+  const leftIdx = targets.flatMap((_, i) => (recoveredAt(i) ? [] : [i]));
+  const remaining = leftIdx.map((i) => targets[i]);
+  const noteOf = (i: number): string | null => {
+    const r = recoveries?.[i];
+    return r && r.lift === null && r.note ? noteText(config.lang, r.note) : null;
+  };
+  const logged = (judgedItems: JudgedTarget[] | null, jevLifts: boolean): RmLogTarget[] =>
+    targets.map((t, i) => {
+      const base = { shown: t.shown, path: t.path };
+      const done = recoveredAt(i);
+      if (done) return { ...base, lift: done.lift, ...(done.copy === undefined ? {} : { copy: done.copy }) };
+      const item = judgedItems?.[leftIdx.indexOf(i)];
+      const note = noteOf(i);
+      return { ...base, lift: jevLifts && item ? 'jev' : null, ...(note === null ? {} : { note }), ...(item ? { kind: item.kind, p: item.p } : {}) };
+    });
+  if (remaining.length === 0) {
+    log({ decision: 'pass', targets: logged(null, false) });
+    return JSON.stringify({ systemMessage: recoverMessage(config.lang, recovered) });
+  }
   let judged: Judged | null = null;
-  try {
-    judged = await judgeTargets(result.targets, input, command, key, keys, config, deps, () => now().getTime() - started);
-  } catch {
-    judged = null;
+  const key = config.rm.jev ? readJevKey(deps.env, config.keyFile) : null;
+  if (key) {
+    try {
+      judged = await judgeTargets(remaining, input, command, key, keys, config, deps, elapsed);
+    } catch {
+      judged = null;
+    }
   }
-  if (!judged) {
-    log(plain());
-    return hookOutput(result);
+  const pass = judged !== null && lifts(judged.items, config.rm.throwawayYes);
+  if (judged && pass) {
+    log({ decision: 'pass', targets: logged(judged.items, true), jev: judged.calls });
+    const message = recovered.length === 0 ? passMessage(config.lang, judged.items) : recoverMessage(config.lang, [...recovered, ...judged.items.map((i): Lifted => ({ path: i.path, lift: 'jev', p: i.p ?? 0 }))]);
+    return JSON.stringify({ systemMessage: message });
   }
-  const pass = lifts(judged.items, config.rm.throwawayYes);
-  const asked = pass ? result : { ...result, reason: `${result.reason}${askNote(config.lang, judged.items)}` };
-  log({
-    decision: pass ? 'pass' : 'ask',
-    reason: pass ? undefined : asked.reason,
-    targets: judged.items.map((t) => ({ shown: t.shown, path: t.path, lift: pass ? 'jev' : null, kind: t.kind, p: t.p })),
-    jev: judged.calls,
+  const notes = leftIdx.flatMap((i) => {
+    const note = noteOf(i);
+    return note === null ? [] : [` · ${remaining.length > 1 ? `${path.win32.basename(targets[i].path as string)}: ` : ''}${note}`];
   });
-  if (pass) return JSON.stringify({ systemMessage: passMessage(config.lang, judged.items) });
-  return hookOutput(asked);
+  const reason = `${askReason(remaining)}${notes.join('')}${judged ? askNote(config.lang, judged.items) : ''}`;
+  log({ decision: 'ask', reason, targets: logged(judged?.items ?? null, false), ...(judged ? { jev: judged.calls } : {}) });
+  return hookOutput({ ...result, reason });
 }

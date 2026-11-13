@@ -213,3 +213,16 @@ export function folderRecovery(dir: string, git: GitRunner = runGit): Recovery {
     return NOT_LIFTED;
   }
 }
+
+export const MAX_RECOVER_TARGETS = 10;
+
+// The clock is also checked before every git call, so a target that starts just inside the budget runs at most one call past it.
+export function recoverTargets(paths: string[], command: string, cwd: string, home: string, outOfTime: () => boolean, git: GitRunner = runGit): Recovery[] {
+  const named = namedPaths(command, cwd, home);
+  const limited: GitRunner = (args, env) => (outOfTime() ? { status: null, stdout: '', stderr: '' } : git(args, env));
+  return paths.map((target) => {
+    if (outOfTime()) return NOT_LIFTED;
+    const result = isDirectory(target) ? folderRecovery(target, limited) : fileRecovery(target, named, paths, limited);
+    return result.lift === null && outOfTime() ? NOT_LIFTED : result;
+  });
+}

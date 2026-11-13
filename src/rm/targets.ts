@@ -106,15 +106,19 @@ function listed(targets: RmTarget[]): string {
 
 export const UNREAD_TARGET = '(분석하지 못한 명령)';
 
+export function askReason(targets: RmTarget[]): string {
+  return `실제 파일 삭제: ${listed(targets)}`;
+}
+
 export function decisionOf({ deny, targets, failed }: ReadResult): RmDecision | null {
   if (deny !== null) return { decision: 'deny', reason: deny };
   if (failed.length) {
     const note = `삭제 명령을 분석하지 못함: ${failed[0]}`;
     // A target without a path keeps Jev from lifting an ask that covers a deletion nobody could read.
-    return { decision: 'ask', reason: targets.length ? `실제 파일 삭제: ${listed(targets)} · ${note}` : note, targets: [...targets, { shown: UNREAD_TARGET, path: null }] };
+    return { decision: 'ask', reason: targets.length ? `${askReason(targets)} · ${note}` : note, targets: [...targets, { shown: UNREAD_TARGET, path: null }] };
   }
   if (!targets.length) return null;
-  return { decision: 'ask', reason: `실제 파일 삭제: ${listed(targets)}`, targets };
+  return { decision: 'ask', reason: askReason(targets), targets };
 }
 
 export function hookOutput({ decision, reason }: RmDecision): string {

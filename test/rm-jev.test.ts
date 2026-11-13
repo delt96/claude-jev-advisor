@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DEFAULT_CONFIG, writeConfig, type Config } from '../src/config.js';
 import type { FetchFn } from '../src/jev.js';
+import type { GitRunner } from '../src/rm/git.js';
 import { dataDir } from '../src/paths.js';
 import type { FactProbe } from '../src/rm/facts.js';
 import { RM_QUESTIONS, askNote, lifts, passMessage, rmJevRequest } from '../src/rm/judge.js';
@@ -264,4 +265,22 @@ test('a key cut in half by an excerpt never leaves its start in the request or t
   assert.equal(bodies.length, 1);
   assert.equal(bodies[0].includes('ts-test'), false);
   assert.equal(fs.readFileSync(path.join(dataDir(home), 'log', '2026-10.jsonl'), 'utf8').includes('ts-test'), false);
+});
+
+test('a recovered target and a session test file: Jev is asked only about the test file and the line names both', async () => {
+  const { home, transcript } = setup();
+  const bodies: string[] = [];
+  const fakeGit: GitRunner = (args) => {
+    const sub = args[2];
+    const spec = args[args.length - 1];
+    if (sub === 'ls-files') return { status: 0, stdout: spec.endsWith('kept.md') ? 'H kept.md\0' : '', stderr: '' };
+    if (sub === 'hash-object') return { status: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const out = await runRmHook(input(transcript, 'rm -f scratch/a.json src/kept.md'), { ...deps(home, jev([0.93], bodies)), git: fakeGit });
+  assert.equal(bodies.length, 1);
+  assert.match(JSON.parse(bodies[0]).state.target.path, /a\.json$/);
+  assert.deepEqual(JSON.parse(out ?? ''), { systemMessage: '[jev-advisor] 되살릴 수 있어 묻지 않고 지웁니다: kept.md (git), a.json (Jev 0.93)' });
+  const [log] = logLines(home);
+  assert.deepEqual(log.targets.map((t: { lift: string }) => t.lift), ['jev', 'git']);
 });

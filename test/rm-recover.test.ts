@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runGit, type GitRunner } from '../src/rm/git.js';
-import { MAX_COPY_BYTES, MAX_NAMED_PATHS, fileRecovery, folderRecovery, namedPaths, sameContent } from '../src/rm/recover.js';
+import { MAX_COPY_BYTES, MAX_NAMED_PATHS, fileRecovery, folderRecovery, namedPaths, recoverTargets, sameContent } from '../src/rm/recover.js';
 
 const WINDOWS_ONLY = { skip: process.platform !== 'win32' && 'the rm helper runs on Windows only' };
 
@@ -378,4 +378,15 @@ test('a wholly ignored folder names itself, and a folder inside a build folder i
   } finally {
     cleanup(repo);
   }
+});
+
+test('recoverTargets stops checking once out of time', () => {
+  let spent = false;
+  const tracked: GitRunner = (args) => {
+    spent = args[2] === 'status';
+    return { status: 0, stdout: args[2] === 'ls-files' ? 'H x\0' : '', stderr: '' };
+  };
+  const results = recoverTargets(['C:\\d\\a.md', 'C:\\d\\b.md'], 'rm C:/d/a.md C:/d/b.md', 'C:\\work', 'C:\\Users\\me', () => spent, tracked);
+  assert.equal(results[0].lift, 'git');
+  assert.deepEqual(results[1], { lift: null, note: null });
 });

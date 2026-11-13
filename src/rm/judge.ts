@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { Lang } from '../config-shape.js';
 import type { JevQuestion, JevRequest } from '../jev.js';
 import type { Candidate, TargetFacts } from './facts.js';
+import type { RecoveryNote } from './recover.js';
 
 export type JudgedTarget = { path: string; shown: string; kind: Candidate; p: number | null };
 
@@ -80,6 +81,35 @@ export function passMessage(lang: Lang, items: JudgedTarget[]): string {
   const kinds = new Set(items.map((i) => i.kind));
   const phrase = PASS[lang][kinds.size === 1 ? items[0].kind : 'mixed'];
   return `[jev-advisor] ${phrase}: ${items.map((i) => `${name(i)} (${prob(i.p ?? 0)})`).join(', ')}`;
+}
+
+export type Lifted = { path: string; lift: 'git' | 'copy' | 'jev'; copy?: string; p?: number };
+
+const RECOVER_HEAD: Record<Lang, string> = { ko: '되살릴 수 있어 묻지 않고 지웁니다', en: 'Recoverable, so deleted without asking' };
+
+function liftedLabel(lang: Lang, item: Lifted): string {
+  const base = path.win32.basename(item.path);
+  if (item.lift === 'git') return `${base} (git)`;
+  if (item.lift === 'copy') return `${base} (${lang === 'ko' ? '사본' : 'copy of'} ${path.win32.basename(item.copy ?? '')})`;
+  return `${base} (Jev ${prob(item.p ?? 0)})`;
+}
+
+export function recoverMessage(lang: Lang, items: Lifted[]): string {
+  return `[jev-advisor] ${RECOVER_HEAD[lang]}: ${items.map((i) => liftedLabel(lang, i)).join(', ')}`;
+}
+
+export function noteText(lang: Lang, note: RecoveryNote): string {
+  const ko = lang === 'ko';
+  switch (note.kind) {
+    case 'untracked':
+      return `${ko ? 'git에 없음' : 'not in git'}: ${note.path}`;
+    case 'changed':
+      return `${ko ? '바뀜' : 'changed'}: ${note.path}`;
+    case 'unmerged':
+      return ko ? '병합 안 됨' : 'not merged';
+    case 'repository':
+      return `${ko ? '저장소' : 'a repository'}${note.path ? `: ${note.path}` : ''}`;
+  }
 }
 
 export function askNote(lang: Lang, items: JudgedTarget[]): string {
