@@ -281,3 +281,19 @@ test('when recovery runs out of time the rest asks and the hook still answers', 
   assert.doesNotMatch(reason, /C:\\data\\a\.md/);
   assert.ok(clock <= RECOVER_BUDGET_MS + GIT_TIMEOUT_MS, `clock ${clock}`);
 });
+
+test('a throw after the guard decided leaves the guard ask', async () => {
+  const home = tempHome();
+  let boom = false;
+  const fakeGit: GitRunner = () => {
+    boom = true;
+    return { status: 128, stdout: '', stderr: '' };
+  };
+  const clock = () => {
+    if (boom) throw new Error('clock failed');
+    return new Date(NOW);
+  };
+  const out = JSON.parse((await runRmHook(bash('rm C:/data/a.md'), recoverDeps(home, { git: fakeGit, now: clock })))!);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'ask');
+  assert.equal(out.hookSpecificOutput.permissionDecisionReason, '실제 파일 삭제: C:\\data\\a.md');
+});

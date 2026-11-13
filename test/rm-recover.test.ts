@@ -390,3 +390,32 @@ test('recoverTargets stops checking once out of time', () => {
   assert.equal(results[0].lift, 'git');
   assert.deepEqual(results[1], { lift: null, note: null });
 });
+
+test('a named file counts as a copy only when the command just reads it', WINDOWS_ONLY, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-copy-'));
+  const vault = path.join(root, 'vault');
+  const other = path.join(root, 'other');
+  const repo = path.join(root, 'repo');
+  for (const d of [vault, other, repo]) fs.mkdirSync(d);
+  for (const d of [vault, other, repo]) fs.writeFileSync(path.join(d, 'n.md'), 'note\n');
+  fs.writeFileSync(path.join(root, 'x.md'), 'x\n');
+  const nogit: GitRunner = () => ({ status: 128, stdout: '', stderr: 'fatal: not a git repository' });
+  const s = (p: string) => p.replace(/\\/g, '/');
+  const lift = (command: string, target = path.join(vault, 'n.md')) => recoverTargets([target], command, root, 'C:\\Users\\me', () => false, nogit)[0].lift;
+  try {
+    assert.equal(lift(`rm "${s(vault)}/n.md" && cp "${s(root)}/x.md" "${s(other)}/n.md"`), null);
+    assert.equal(lift(`rm "${s(vault)}/n.md"; echo x > "${s(other)}/n.md"`), null);
+    assert.equal(lift(`rm "${s(vault)}/n.md"; echo x >> "${s(other)}/n.md"`), null);
+    assert.equal(lift(`rm "${s(vault)}/n.md"; echo x | tee "${s(other)}/n.md"`), null);
+    assert.equal(lift(`rm "${s(vault)}/n.md"; mv "${s(root)}/x.md" "${s(other)}/n.md"`), null);
+    assert.equal(lift(`rm "${s(vault)}/n.md"; cp -t "${s(root)}" "${s(other)}/n.md"`), null);
+    assert.equal(lift(`rm "${s(vault)}/n.md"; cp "${s(other)}/n.md" "${s(root)}/x.md"; echo > "${s(other)}/n.md"`), null);
+    assert.equal(lift(`rm "${s(vault)}/n.md" && cp "${s(repo)}/n.md" "${s(vault)}/n.md"`), 'copy');
+    assert.equal(lift(`diff "${s(repo)}/n.md" "${s(vault)}/n.md" && rm "${s(vault)}/n.md"`), 'copy');
+    assert.equal(lift(`Copy-Item "${s(root)}/x.md" -Destination "${s(repo)}/n.md"; Remove-Item "${s(vault)}/n.md"`), null);
+    assert.equal(lift(`Copy-Item "${s(repo)}/n.md" -Destination "${s(root)}/x.md"; Remove-Item "${s(vault)}/n.md"`), 'copy');
+    assert.equal(lift(`$v = "${s(repo)}/n.md"; rm "${s(vault)}/n.md"`), null);
+  } finally {
+    cleanup(root);
+  }
+});

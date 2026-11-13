@@ -35,7 +35,102 @@ export function namedPaths(command: string, cwd: string, home: string): string[]
   return found;
 }
 
-const withoutCarriageReturns = (data: Buffer) => data.toString('latin1').replace(/\r\n/g, '\n');
+type Mention = { text: string; path: string | null; redirected: boolean };
+
+const COPY_COMMANDS = new Set(['cp', 'copy', 'copy-item', 'cpi', 'xcopy']);
+const READ_COMMANDS = new Set(['diff', 'fc', 'cmp', 'cat', 'type', 'get-content', 'gc', 'compare-object', 'get-filehash', 'sha256sum', 'md5sum', 'certutil']);
+
+function splitStatements(command: string): string[] {
+  const out: string[] = [];
+  let current = '';
+  let quote: string | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote !== null) {
+      current += c;
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") quote = c;
+    const doubled = command.slice(i, i + 2);
+    const lone = c === '&' && !/[<>]/.test(command[i - 1] ?? '');
+    if (doubled === '&&' || doubled === '||' || c === ';' || c === '|' || c === '\n' || c === '\r' || lone) {
+      out.push(current);
+      current = '';
+      if (doubled === '&&' || doubled === '||') i++;
+      continue;
+    }
+    current += c;
+  }
+  out.push(current);
+  return out;
+}
+
+const isOption = (text: string) => /^-/.test(text) || /^\/[A-Za-z?](?::\S*)?$/.test(text);
+
+// The words of a statement that only read their file: sources of a copy, the existing file of a hard link, any operand
+// of a viewer or hasher. Anything else (a destination, a redirect target, an unknown command, an assignment) is not.
+function readWords(words: Mention[]): Set<Mention> {
+  const reads = new Set<Mention>();
+  if (words.length === 0 || words[0].redirected) return reads;
+  const name = (words[0].text.split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.exe$/, '');
+  const rest = words.slice(1).filter((w) => !w.redirected);
+  const operands = rest.filter((w) => !isOption(w.text));
+  if (READ_COMMANDS.has(name)) {
+    for (const w of operands) reads.add(w);
+  } else if (COPY_COMMANDS.has(name)) {
+    let named = false;
+    let targetDir = false;
+    const sources: Mention[] = [];
+    const positional: Mention[] = [];
+    for (let i = 0; i < rest.length; i++) {
+      const text = rest[i].text;
+      if (/^-(?:destination|dest|de)$/i.test(text)) {
+        named = true;
+        i++;
+      } else if (/^-(?:path|literalpath|lp)$/i.test(text) && rest[i + 1]) {
+        sources.push(rest[++i]);
+      } else if (/^(?:-t|--target-directory(?:=.*)?)$/.test(text)) {
+        targetDir = true;
+        if (!text.includes('=')) i++;
+      } else if (!isOption(text)) {
+        positional.push(rest[i]);
+      }
+    }
+    if (!targetDir) {
+      if (named) sources.push(...positional);
+      else if (positional.length >= 2) sources.push(...positional.slice(0, -1));
+      for (const w of sources) reads.add(w);
+    }
+  } else if (name === 'fsutil' && rest[0]?.text.toLowerCase() === 'hardlink' && rest[1]?.text.toLowerCase() === 'create') {
+    if (rest[3]) reads.add(rest[3]);
+  } else if (name === 'mklink' && rest.some((w) => w.text.toLowerCase() === '/h')) {
+    if (operands[1]) reads.add(operands[1]);
+  }
+  return reads;
+}
+
+// Paths the command only reads. A path that is also written, redirected to, or named by a command not known to only
+// read is left out, so an identical "copy" that the same command overwrites never counts.
+export function readOnlyPaths(command: string, cwd: string, home: string): Set<string> {
+  const verdict = new Map<string, boolean>();
+  for (const statement of splitStatements(command)) {
+    const words: Mention[] = [];
+    for (const match of statement.matchAll(WORD)) {
+      const text = match[1] ?? match[2] ?? match[3] ?? '';
+      words.push({ text, path: resolved(text, cwd, home), redirected: /[<>]\s*$/.test(statement.slice(0, match.index)) });
+    }
+    const reads = readWords(words);
+    for (const w of words) {
+      if (w.path === null) continue;
+      const k = w.path.toLowerCase();
+      verdict.set(k, (verdict.get(k) ?? true) && reads.has(w));
+    }
+  }
+  return new Set([...verdict].filter(([, ok]) => ok).map(([k]) => k));
+}
+
+const withoutCarriageReturns =(data: Buffer) => data.toString('latin1').replace(/\r\n/g, '\n');
 
 export function sameContent(a: string, b: string): boolean {
   try {
@@ -218,7 +313,8 @@ export const MAX_RECOVER_TARGETS = 10;
 
 // The clock is also checked before every git call, so a target that starts just inside the budget runs at most one call past it.
 export function recoverTargets(paths: string[], command: string, cwd: string, home: string, outOfTime: () => boolean, git: GitRunner = runGit): Recovery[] {
-  const named = namedPaths(command, cwd, home);
+  const readable = readOnlyPaths(command, cwd, home);
+  const named = namedPaths(command, cwd, home).filter((p) => readable.has(p.toLowerCase()));
   const limited: GitRunner = (args, env) => (outOfTime() ? { status: null, stdout: '', stderr: '' } : git(args, env));
   return paths.map((target) => {
     if (outOfTime()) return NOT_LIFTED;

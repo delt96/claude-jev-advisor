@@ -135,66 +135,77 @@ export async function runRmHook(raw: string, deps: RmHookDeps): Promise<string |
     if (skipped.length > 0) log({ decision: 'none', targets: [] });
     return null;
   }
-  const targets = result.targets ?? [];
-  if (result.decision !== 'ask' || targets.length === 0 || targets.some((t) => t.path === null)) {
-    log({ decision: result.decision, reason: result.reason, targets: targets.map((t) => ({ shown: t.shown, path: t.path, lift: null })) });
+  const afterGuard = async (): Promise<string> => {
+    const targets = result.targets ?? [];
+    if (result.decision !== 'ask' || targets.length === 0 || targets.some((t) => t.path === null)) {
+      log({ decision: result.decision, reason: result.reason, targets: targets.map((t) => ({ shown: t.shown, path: t.path, lift: null })) });
+      return hookOutput(result);
+    }
+    const elapsed = () => now().getTime() - started;
+    // Recovery can only lift an ask; a failure anywhere in it leaves the ask as the guard decided it.
+    let recoveries: Recovery[] | null = null;
+    if (config.rm.recoverable && targets.length <= MAX_RECOVER_TARGETS) {
+      try {
+        recoveries = recoverTargets(targets.map((t) => t.path as string), command, cwd, deps.home, () => elapsed() > RECOVER_BUDGET_MS, deps.git);
+      } catch {
+        recoveries = null;
+      }
+    }
+    const recoveredAt = (i: number): Lifted | null => {
+      const r = recoveries?.[i];
+      if (!r || r.lift === null) return null;
+      return { path: targets[i].path as string, lift: r.lift, ...(r.lift === 'copy' ? { copy: r.copy } : {}) };
+    };
+    const recovered = targets.flatMap((_, i) => recoveredAt(i) ?? []);
+    const leftIdx = targets.flatMap((_, i) => (recoveredAt(i) ? [] : [i]));
+    const remaining = leftIdx.map((i) => targets[i]);
+    const noteOf = (i: number): string | null => {
+      const r = recoveries?.[i];
+      return r && r.lift === null && r.note ? noteText(config.lang, r.note) : null;
+    };
+    const logged = (judgedItems: JudgedTarget[] | null, jevLifts: boolean): RmLogTarget[] =>
+      targets.map((t, i) => {
+        const base = { shown: t.shown, path: t.path };
+        const done = recoveredAt(i);
+        if (done) return { ...base, lift: done.lift, ...(done.copy === undefined ? {} : { copy: done.copy }) };
+        const item = judgedItems?.[leftIdx.indexOf(i)];
+        const note = noteOf(i);
+        return { ...base, lift: jevLifts && item ? 'jev' : null, ...(note === null ? {} : { note }), ...(item ? { kind: item.kind, p: item.p } : {}) };
+      });
+    if (remaining.length === 0) {
+      log({ decision: 'pass', targets: logged(null, false) });
+      return JSON.stringify({ systemMessage: recoverMessage(config.lang, recovered) });
+    }
+    let judged: Judged | null = null;
+    const key = config.rm.jev ? readJevKey(deps.env, config.keyFile) : null;
+    if (key) {
+      try {
+        judged = await judgeTargets(remaining, input, command, key, keys, config, deps, elapsed);
+      } catch {
+        judged = null;
+      }
+    }
+    const pass = judged !== null && lifts(judged.items, config.rm.throwawayYes);
+    if (judged && pass) {
+      log({ decision: 'pass', targets: logged(judged.items, true), jev: judged.calls });
+      const message = recovered.length === 0 ? passMessage(config.lang, judged.items) : recoverMessage(config.lang, [...recovered, ...judged.items.map((i): Lifted => ({ path: i.path, lift: 'jev', p: i.p ?? 0 }))]);
+      return JSON.stringify({ systemMessage: message });
+    }
+    const notes = leftIdx.flatMap((i) => {
+      const note = noteOf(i);
+      return note === null ? [] : [` · ${remaining.length > 1 ? `${path.win32.basename(targets[i].path as string)}: ` : ''}${note}`];
+    });
+    const reason = `${askReason(remaining)}${notes.join('')}${judged ? askNote(config.lang, judged.items) : ''}`;
+    log({ decision: 'ask', reason, targets: logged(judged?.items ?? null, false), ...(judged ? { jev: judged.calls } : {}) });
+    return hookOutput({ ...result, reason });
+  };
+  // A throw here would reach hook.ts, which prints nothing and so drops the guard's ask.
+  try {
+    return await afterGuard();
+  } catch {
+    try {
+      log({ decision: result.decision, reason: result.reason, targets: (result.targets ?? []).map((t) => ({ shown: t.shown, path: t.path, lift: null })) });
+    } catch {}
     return hookOutput(result);
   }
-  const elapsed = () => now().getTime() - started;
-  // Recovery can only lift an ask; a failure anywhere in it leaves the ask as the guard decided it.
-  let recoveries: Recovery[] | null = null;
-  if (config.rm.recoverable && targets.length <= MAX_RECOVER_TARGETS) {
-    try {
-      recoveries = recoverTargets(targets.map((t) => t.path as string), command, cwd, deps.home, () => elapsed() > RECOVER_BUDGET_MS, deps.git);
-    } catch {
-      recoveries = null;
-    }
-  }
-  const recoveredAt = (i: number): Lifted | null => {
-    const r = recoveries?.[i];
-    if (!r || r.lift === null) return null;
-    return { path: targets[i].path as string, lift: r.lift, ...(r.lift === 'copy' ? { copy: r.copy } : {}) };
-  };
-  const recovered = targets.flatMap((_, i) => recoveredAt(i) ?? []);
-  const leftIdx = targets.flatMap((_, i) => (recoveredAt(i) ? [] : [i]));
-  const remaining = leftIdx.map((i) => targets[i]);
-  const noteOf = (i: number): string | null => {
-    const r = recoveries?.[i];
-    return r && r.lift === null && r.note ? noteText(config.lang, r.note) : null;
-  };
-  const logged = (judgedItems: JudgedTarget[] | null, jevLifts: boolean): RmLogTarget[] =>
-    targets.map((t, i) => {
-      const base = { shown: t.shown, path: t.path };
-      const done = recoveredAt(i);
-      if (done) return { ...base, lift: done.lift, ...(done.copy === undefined ? {} : { copy: done.copy }) };
-      const item = judgedItems?.[leftIdx.indexOf(i)];
-      const note = noteOf(i);
-      return { ...base, lift: jevLifts && item ? 'jev' : null, ...(note === null ? {} : { note }), ...(item ? { kind: item.kind, p: item.p } : {}) };
-    });
-  if (remaining.length === 0) {
-    log({ decision: 'pass', targets: logged(null, false) });
-    return JSON.stringify({ systemMessage: recoverMessage(config.lang, recovered) });
-  }
-  let judged: Judged | null = null;
-  const key = config.rm.jev ? readJevKey(deps.env, config.keyFile) : null;
-  if (key) {
-    try {
-      judged = await judgeTargets(remaining, input, command, key, keys, config, deps, elapsed);
-    } catch {
-      judged = null;
-    }
-  }
-  const pass = judged !== null && lifts(judged.items, config.rm.throwawayYes);
-  if (judged && pass) {
-    log({ decision: 'pass', targets: logged(judged.items, true), jev: judged.calls });
-    const message = recovered.length === 0 ? passMessage(config.lang, judged.items) : recoverMessage(config.lang, [...recovered, ...judged.items.map((i): Lifted => ({ path: i.path, lift: 'jev', p: i.p ?? 0 }))]);
-    return JSON.stringify({ systemMessage: message });
-  }
-  const notes = leftIdx.flatMap((i) => {
-    const note = noteOf(i);
-    return note === null ? [] : [` · ${remaining.length > 1 ? `${path.win32.basename(targets[i].path as string)}: ` : ''}${note}`];
-  });
-  const reason = `${askReason(remaining)}${notes.join('')}${judged ? askNote(config.lang, judged.items) : ''}`;
-  log({ decision: 'ask', reason, targets: logged(judged?.items ?? null, false), ...(judged ? { jev: judged.calls } : {}) });
-  return hookOutput({ ...result, reason });
 }
