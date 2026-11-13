@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseState, type ContextState } from '../display/line.js';
-import { adviceDir, logDir, stateDir } from '../paths.js';
+import { adviceDir, logDir, pressDir, stateDir } from '../paths.js';
 
 const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/;
 const RENAME_ATTEMPTS = 3;
@@ -53,9 +53,10 @@ export function removeState(home: string, sessionId: string): void {
   if (file) fs.rmSync(file, { force: true });
 }
 
-// The mod writes advice/<sessionId>.json, and its $.fs.write is not documented to make missing folders; this runs before any advice can exist.
+// The mod writes advice/<sessionId>.json and presses/<sessionId>-<at>.json, and its $.fs.write is not documented to make missing folders; this runs before any advice can exist.
 export function prepareAdviceDir(home: string): void {
   fs.mkdirSync(adviceDir(home), { recursive: true });
+  fs.mkdirSync(pressDir(home), { recursive: true });
 }
 
 export function removeAdvice(home: string, sessionId: string): void {
