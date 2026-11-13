@@ -51,7 +51,7 @@ The hooks also reach Claude Code sessions that are already open. The bottom-row 
 | `claude-jev-advisor uninstall [rm] [context]` | Removes this package's hooks and display from `settings.json` |
 | `claude-jev-advisor on [rm] [context]` / `off [rm] [context]` | Switches helpers on or off without touching `settings.json` |
 | `claude-jev-advisor status` | Shows what is registered and on, the display, the shortcut, whether a key is set, the thresholds and the last judgment |
-| `claude-jev-advisor report [--days 7] [--turns]` | Lists the advice by episode with what followed (compacted, cleared, compacted while away, auto-compacted at the limit, kept going, session deleted), marks band presses, and summarizes the `rm` decisions with your answers and waits |
+| `claude-jev-advisor report [--days 7] [--turns]` | Lists the advice by episode with what followed (compacted, cleared, compacted while away, auto-compacted at the limit, kept going, session deleted, transcript not found), marks band presses, and summarizes the `rm` decisions with your answers and waits |
 | `claude-jev-advisor key` | Asks for the TypeSafe API key, checks it and saves it (needs an interactive terminal) |
 | `claude-jev-advisor help` | Prints the usage |
 
@@ -95,7 +95,7 @@ Judging starts at 250k because a conversation passes 100k after a request or two
 
 With the `mod` display the band's advice is also written to `advice/<session>.json` in the data folder, as `{ "kind": "compact" | "clear" | null, "at": … }`, when it changes. [claude-alarm](https://www.npmjs.com/package/@delt/claude-alarm) 1.9 or later reads it to highlight the matching `/compact` or `/clear` button on its dashboard. A session that never had advice gets no file.
 
-`claude-jev-advisor report` lists the advice by episode with the time, the session, the size, Jev's answers, the start of the last request and what followed: compacted, cleared, compacted while away, auto-compacted at the limit, kept going, or session deleted. It marks the advice you pressed the band button for and ends with the `rm` decisions, your answers and how long each waited.
+`claude-jev-advisor report` lists the advice by episode with the time, the session, the size, Jev's answers, the start of the last request and what followed: compacted, cleared, compacted while away, auto-compacted at the limit, kept going, session deleted, or transcript not found. `--turns` prints one line per advice turn. It marks the advice you pressed the band button for and ends with the `rm` decisions, your answers and how long each waited.
 
 ## The rm helper
 
@@ -149,24 +149,24 @@ What its decisions do depends on Claude Code's permission mode:
 
 ### When the ask is lifted
 
-First the hook checks whether every target can be restored. This is done by code, needs no key and sends nothing to Jev. It looks at up to 10 targets and stops when its time budget (8 seconds) is spent; the targets it did not reach keep the ask. `"recoverable": false` in the `rm` config switches it off.
+First the hook checks whether every target can be restored. This is done by code, needs no key and sends nothing to Jev. A command with more than 10 targets skips this check, and targets not reached within its time budget (8 seconds) keep the ask. `"recoverable": false` in the `rm` config switches it off.
 
 | Target | Lifted when |
 |---|---|
 | A file in a git repository | It is tracked and unchanged, or its exact content is in some commit (`git log --all --find-object`). A file marked assume-unchanged or skip-worktree gets the content check. |
-| A file with an identical copy | The command itself names the copy (`diff repo.md vault.md`, then the delete), or copies one file onto the deleted one (`cp`, `copy`, `Copy-Item`). The copy is compared by content (CRLF against LF alone does not count as a difference), up to 2 MB, and is not itself a target, not inside a target folder and not a hard link of a target. |
+| A file with an identical copy | The command itself names the copy (`diff repo.md vault.md`, then the delete), or copies one file onto the deleted one (`cp`, `copy`, `Copy-Item`, `cpi`). The copy is compared by content (CRLF against LF alone does not count as a difference), up to 2 MB, and is not itself a target, not inside a target folder and not a hard link of a target. |
 | A folder in a repository | It is clean, its ignored files are only in the build folders above, and it holds no assume-unchanged or skip-worktree file and no nested repository or submodule. |
-| A linked worktree | Its folder is the worktree root and its `HEAD` is in another branch (merged). |
+| A linked worktree | Its folder is the worktree root, it is clean (no changes, no untracked files, no ignored files outside the build folders, no assume-unchanged or skip-worktree file, no nested repository), and its `HEAD` is in another local or remote branch (merged). |
 | A folder outside git | It holds only merged linked worktrees or empty folders, one level deep and at most 10. |
 | A folder with its own `.git` folder | Never. It always asks. |
 
-A copy counts only when the whole command is plain: each statement is a delete, a read without options (`diff`, `fc`, `cmp`, `cat`, `type`, `Get-Content`, `Compare-Object`, `Get-FileHash`, `sha256sum`, `md5sum`, `certutil -hashfile <file> [ALG]`) or a copy of one file onto one of the deleted files. The command may use only plain characters (no redirects, variables, `$`, parentheses, braces, `#`, `@`, wildcards or curly quotes), command names written bare, and in Bash no unquoted backslash. Anything fancier asks. A copy made by the same command does not count, because the hook runs before the command does.
+A copy counts only when the whole command is plain: each statement is a delete, a read without options (`diff`, `fc`, `cmp`, `cat`, `type`, `Get-Content`, `Compare-Object`, `Get-FileHash`, `sha256sum`, `md5sum`, `certutil -hashfile <file> [ALG]`) or a plain copy (`cp`, `copy`, `Copy-Item`, `cpi`) of one file onto one of the deleted files. The command may use only plain characters (no redirects, variables, `$`, parentheses, braces, `#`, `@`, wildcards or curly quotes), command names written bare, and in Bash no unquoted backslash. Anything fancier asks. A copy made by the same command does not count, because the hook runs before the command does.
 
 When everything is lifted, the hook makes no decision and shows `[jev-advisor] 되살릴 수 있어 묻지 않고 지웁니다: out.json (git), a.md (사본 b.md)` (with `--lang en`, `Recoverable, so deleted without asking: …`). When recovery lifts some targets and Jev the rest, one such line shows `(Jev 0.93)` for the Jev ones. When a target is not lifted, the ask reason gets a note for it:
 
 | Note (`ko` / `en`) | Meaning |
 |---|---|
-| `git에 없음: <path>` / `not in git: <path>` | Git does not know the file |
+| `git에 없음: <path>` / `not in git: <path>` | Git does not know it (also an untracked or ignored file inside a folder) |
 | `바뀜: <path>` / `changed: <path>` | The file or folder has changes git does not hold |
 | `병합 안 됨` / `not merged` | The worktree's branch is not merged |
 | `저장소` / `a repository` | The folder is or holds a repository (`: <path>` names it when it is inside the folder) |
