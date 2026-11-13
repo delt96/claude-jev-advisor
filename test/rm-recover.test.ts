@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runGit, type GitRunner } from '../src/rm/git.js';
-import { MAX_COPY_BYTES, MAX_NAMED_PATHS, fileRecovery, folderRecovery, namedPaths, recoverTargets, sameContent } from '../src/rm/recover.js';
+import { MAX_COPY_BYTES, fileRecovery, folderRecovery, recoverTargets, sameContent } from '../src/rm/recover.js';
 
 const WINDOWS_ONLY = { skip: process.platform !== 'win32' && 'the rm helper runs on Windows only' };
 
@@ -30,15 +30,6 @@ function commit(repo: string, file: string, text: string) {
 }
 
 const cleanup = (...dirs: string[]) => dirs.forEach((d) => fs.rmSync(d, { recursive: true, force: true }));
-
-test('namedPaths finds literal paths in quotes and bare words, in Git Bash and Windows spelling, and skips variables, wildcards and URLs', () => {
-  const command = '$v = "C:\\vault\\a.md"; fsutil hardlink create "$v" "C:\\repo\\docs\\a.md"; cp /c/repo/b.md ./c.md; rm $x *.md https://x.y/z';
-  assert.deepEqual(namedPaths(command, 'C:\\work', 'C:\\Users\\me'), ['C:\\vault\\a.md', 'C:\\repo\\docs\\a.md', 'C:\\repo\\b.md', 'C:\\work\\c.md']);
-  assert.deepEqual(namedPaths('cat ~/notes/n.md \\\\srv\\share\\x.md //srv/share/y.md', 'C:\\work', 'C:\\Users\\me'), ['C:\\Users\\me\\notes\\n.md']);
-  const many = Array.from({ length: 40 }, (_, i) => `C:\\d\\f${i}.md`).join(' ');
-  assert.equal(namedPaths(many, 'C:\\work', 'C:\\Users\\me').length, MAX_NAMED_PATHS);
-  assert.deepEqual(namedPaths('cp C:\\d\\A.md c:/d/a.md', 'C:\\work', 'C:\\Users\\me'), ['C:\\d\\A.md']);
-});
 
 test('sameContent accepts identical bytes and line-ending-only differences, and nothing over 2MB', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-recover-'));
@@ -401,7 +392,7 @@ function copyFixture() {
   fs.writeFileSync(path.join(root, 'x.md'), 'x\n');
   const nogit: GitRunner = () => ({ status: 128, stdout: '', stderr: 'fatal: not a git repository' });
   const s = (p: string) => p.replace(/\\/g, '/');
-  const lift = (command: string, cwd = root) => recoverTargets([path.join(dirs.vault, 'n.md')], command, cwd, 'C:\\Users\\me', () => false, nogit)[0].lift;
+  const lift = (command: string, cwd = root, targets = [path.join(dirs.vault, 'n.md')]) => recoverTargets(targets, command, cwd, 'C:\\Users\\me', () => false, nogit)[0].lift;
   return { root, ...dirs, s, lift };
 }
 
@@ -461,6 +452,74 @@ test('a directory change, a directory destination or a tool that writes by its o
     assert.equal(lift(`${rm}; cp "${s(repo)}/n.md" "${s(root)}/x.md"`), null);
     assert.equal(lift(`cat -n "${s(other)}/n.md" && ${rm}`), null);
     assert.equal(lift(`${rm}; cat "${s(other)}/n.md"; bash -c "echo x > n.md"`), null);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('a command whose shell grammar the copy check does not read leaves no copy', WINDOWS_ONLY, () => {
+  const { root, other, vault, s, lift } = copyFixture();
+  const V = `"${s(vault)}/n.md"`;
+  const O = `"${s(other)}/n.md"`;
+  const X = `"${s(root)}/x.md"`;
+  const W = path.join(root, 'w.md');
+  fs.writeFileSync(W, 'w\n');
+  try {
+    assert.equal(lift(`Remove-Item ${V}; cat ${O} (cp ${X} ${O})`), null);
+    assert.equal(lift(`Remove-Item ${V}; cat ${O} @(cp ${X} ${O})`), null);
+    assert.equal(lift(`rm ${V}; cat ${O} #"\ncp ${X} ${O} #"`), null);
+    assert.equal(lift(`rm ${V}; cat ${O} \\"; cp ${X} ${O}; echo \\"`), null);
+    assert.equal(lift(`cat() ( cp ${X} ${O} ); rm ${V}; cat ${O}`), null);
+    assert.equal(lift(`Remove-Item ${V}; cat ${O}; cat \u2018"\u2019; cp ${X} ${O}; cat \u2018"\u2019`), null);
+    assert.equal(lift(`Copy-Item \u2013Destination:${s(other)}/n.md "${s(W)}"; Remove-Item ${V}; Remove-Item "${s(W)}"; cat ${O}`, root, [path.join(vault, 'n.md'), W]), null);
+    assert.equal(lift(`rm ${V}\rcp ${X} ${V}; cat ${O}`), null);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('a Korean file name still lifts as a copy, cp takes only -f, and a command name with a folder is not trusted', WINDOWS_ONLY, () => {
+  const { root, other, repo, vault, s, lift } = copyFixture();
+  const memo = path.join(vault, '메모.md');
+  fs.writeFileSync(memo, 'memo\n');
+  fs.writeFileSync(path.join(repo, '메모.md'), 'memo\n');
+  const V = `"${s(vault)}/n.md"`;
+  const R = `"${s(repo)}/n.md"`;
+  try {
+    assert.equal(lift(`rm "${s(vault)}/메모.md" && cp "${s(repo)}/메모.md" "${s(vault)}/메모.md"`, root, [memo]), 'copy');
+    assert.equal(lift(`rm ${V}; cp -Path ${R} ${V}`), null);
+    assert.equal(lift(`rm ${V}; cp -Force ${R} ${V}`), null);
+    assert.equal(lift(`Remove-Item ${V}; Copy-Item -Path ${R} -Destination ${V}`), 'copy');
+    assert.equal(lift(`Remove-Item ${V}; Copy-Item -f ${R} ${V}`), null);
+    assert.equal(lift(`./cat "${s(other)}/n.md"; rm ${V}`), null);
+    assert.equal(lift(`C:\\x\\cat.exe "${s(other)}/n.md"; rm ${V}`), null);
+    assert.equal(lift(`rm ${V}; CAT.exe "${s(other)}/n.md"`), 'copy');
+    assert.equal(lift(`/usr/bin/rm ${V}; cat "${s(other)}/n.md"`), null);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('a hard link of another target, or of a file the command copies onto, is not a copy', WINDOWS_ONLY, () => {
+  const { root, other, repo, sub, vault, s, lift } = copyFixture();
+  const V = path.join(vault, 'n.md');
+  const R = path.join(repo, 'n.md');
+  const W = path.join(sub, 'n.md');
+  fs.rmSync(W);
+  fs.linkSync(R, W);
+  const L = path.join(other, 'n.md');
+  fs.rmSync(L);
+  fs.linkSync(V, L);
+  const X = `"${s(root)}/x.md"`;
+  const q = (p: string) => `"${s(p)}"`;
+  try {
+    assert.equal(lift(`rm ${q(V)} ${q(W)}; cp ${X} ${q(W)}; cat ${q(R)}`, root, [V, W]), null);
+    assert.equal(lift(`cp ${X} ${q(W)}; rm ${q(V)} ${q(W)}; cat ${q(R)}`, root, [V, W]), null);
+    assert.equal(lift(`rm ${q(V)} ${q(W)}; cat ${q(R)}`, root, [V, W]), null);
+    assert.deepEqual(fileRecovery(V, [R], [V, W]), { lift: null, note: null });
+    assert.deepEqual(fileRecovery(V, [R], [V]), { lift: 'copy', copy: R });
+    assert.equal(lift(`rm ${q(V)}; cat ${q(L)}`), 'copy');
+    assert.equal(lift(`cp ${X} ${q(V)}; rm ${q(V)}; cat ${q(L)}`), null);
   } finally {
     cleanup(root);
   }

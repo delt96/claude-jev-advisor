@@ -6,7 +6,7 @@ import { BUILD_DIRS } from './targets.js';
 export type RecoveryNote = { kind: 'untracked' | 'changed' | 'unmerged' | 'repository'; path?: string };
 export type Recovery = { lift: 'git' } | { lift: 'copy'; copy: string } | { lift: null; note: RecoveryNote | null };
 
-export const MAX_NAMED_PATHS = 30;
+const MAX_NAMED_PATHS = 30;
 export const MAX_COPY_BYTES = 2 * 1024 * 1024;
 export const MAX_CONTAINER_CHILDREN = 10;
 
@@ -22,23 +22,13 @@ function resolved(word: string, cwd: string, home: string): string | null {
   return win.resolve(cwd, word);
 }
 
-export function namedPaths(command: string, cwd: string, home: string): string[] {
-  const seen = new Set<string>();
-  const found: string[] = [];
-  for (const match of command.matchAll(WORD)) {
-    const full = resolved(match[1] ?? match[2] ?? match[3] ?? '', cwd, home);
-    if (full === null || seen.has(full.toLowerCase())) continue;
-    seen.add(full.toLowerCase());
-    found.push(full);
-    if (found.length >= MAX_NAMED_PATHS) break;
-  }
-  return found;
-}
-
 const DELETE_NAMES = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'ri', 'remove-item']);
 const READ_NAMES = new Set(['diff', 'fc', 'cmp', 'cat', 'type', 'get-content', 'gc', 'compare-object', 'get-filehash', 'sha256sum', 'md5sum']);
-const COPY_NAMES = new Set(['cp', 'copy', 'copy-item', 'cpi']);
-const ANY_REDIRECT_OR_SUBSTITUTION = /[<>`$]/;
+const POWERSHELL_COPY_NAMES = new Set(['copy', 'copy-item', 'cpi']);
+// Only characters whose meaning is the same in Git Bash and PowerShell, so the split below reads the command as both
+// shells do. Everything else (subexpressions, comments, escapes, redirects, curly quotes, en dashes) gives no candidates.
+const PLAIN_COMMAND = /^[\p{L}\p{N}\p{M} \t\r\n._\-:\\/~'";&|]*$/u;
+const ESCAPED_QUOTE_OR_LONE_CR = /\\["']|\r(?!\n)/;
 
 function splitStatements(command: string): string[] {
   const out: string[] = [];
@@ -72,18 +62,18 @@ function operandPath(text: string, cwd: string, home: string): string | null {
   return resolved(text, cwd, home) ?? win.resolve(cwd, text);
 }
 
-// A plain copy: two path operands, only -f/-Force and the exact parameter names -Path, -LiteralPath and -Destination.
-function copySides(args: string[]): { source: string; destination: string } | null {
+// Git Bash cp is GNU cp, where `-Path` is the flag cluster -P -a -t h, so only PowerShell's Copy-Item gets parameter names.
+function copySides(args: string[], powershell: boolean): { source: string; destination: string } | null {
   const positional: string[] = [];
   let source: string | null = null;
   let destination: string | null = null;
   for (let i = 0; i < args.length; i++) {
     const lower = args[i].toLowerCase();
-    if (lower === '-f' || lower === '-force') continue;
-    if (lower === '-path' || lower === '-literalpath') {
+    if (lower === (powershell ? '-force' : '-f')) continue;
+    if (powershell && (lower === '-path' || lower === '-literalpath')) {
       if (source !== null || i + 1 >= args.length) return null;
       source = args[++i];
-    } else if (lower === '-destination') {
+    } else if (powershell && lower === '-destination') {
       if (destination !== null || i + 1 >= args.length) return null;
       destination = args[++i];
     } else if (args[i].startsWith('-') || SLASH_OPTION.test(args[i])) {
@@ -98,37 +88,53 @@ function copySides(args: string[]): { source: string; destination: string } | nu
   return { source, destination };
 }
 
+function fileId(p: string): string | null {
+  try {
+    const s = fs.statSync(p, { bigint: true });
+    return `${s.dev}:${s.ino}`;
+  } catch {
+    return null;
+  }
+}
+
 // Files a command only reads or replaces with their own copy. The whole command has to be made of deletes, plain reads
 // and plain copies onto a deleted file, with no redirect, assignment, directory change or other tool: any other
 // statement can overwrite a candidate in ways that cannot be read from its words, so then there are no candidates.
 export function readOnlyPaths(command: string, cwd: string, home: string, targets: string[]): string[] {
-  if (ANY_REDIRECT_OR_SUBSTITUTION.test(command)) return [];
+  if (!PLAIN_COMMAND.test(command) || ESCAPED_QUOTE_OR_LONE_CR.test(command)) return [];
   const deleted = new Set(targets.map((t) => win.normalize(t).replace(/\\+$/, '').toLowerCase()));
   const found: string[] = [];
+  const written: string[] = [];
   for (const statement of splitStatements(command)) {
     const words = [...statement.matchAll(WORD)].map((m) => m[1] ?? m[2] ?? m[3] ?? '');
     if (words.length === 0) continue;
-    const name = (words[0].split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.exe$/, '');
+    // A command named with a folder (./cat, C:\x\cat.exe) can be any script.
+    if (/[\\/:]/.test(words[0])) return [];
+    const name = words[0].toLowerCase().replace(/\.exe$/, '');
     const args = words.slice(1);
     if (DELETE_NAMES.has(name)) continue;
     if (READ_NAMES.has(name) && !args.some((a) => a.startsWith('-') || SLASH_OPTION.test(a))) {
       for (const a of args) found.push(operandPath(a, cwd, home) ?? '');
     } else if (name === 'certutil' && (args.length === 2 || args.length === 3) && args[0].toLowerCase() === '-hashfile') {
       found.push(operandPath(args[1], cwd, home) ?? '');
-    } else if (COPY_NAMES.has(name)) {
-      const sides = copySides(args);
+    } else if (name === 'cp' || POWERSHELL_COPY_NAMES.has(name)) {
+      const sides = copySides(args, name !== 'cp');
       const destination = sides ? operandPath(sides.destination, cwd, home) : null;
       if (!sides || destination === null || !deleted.has(destination.toLowerCase())) return [];
       found.push(operandPath(sides.source, cwd, home) ?? '');
+      written.push(destination);
     } else {
       return [];
     }
   }
+  // Copying onto a file rewrites every hard link of it, so a hard link of a copy destination does not keep the old content.
+  const overwritten = new Set(written.map(fileId).filter((id) => id !== null));
   const seen = new Set<string>();
   return found.filter((p) => {
     if (p === '' || seen.has(p.toLowerCase())) return false;
     seen.add(p.toLowerCase());
-    return true;
+    const id = fileId(p);
+    return id !== null && !overwritten.has(id);
   }).slice(0, MAX_NAMED_PATHS);
 }
 
@@ -171,9 +177,13 @@ function identicalCopy(file: string, named: string[], targets: string[]): string
   const own = realKey(file);
   if (own === null) return null;
   const blocked = [own, ...targets.map((t) => realKey(t) ?? key(t)), ...targets.map(key)];
+  // Real paths miss hard links. One of the file itself survives its delete; one of another target shares that target's fate.
+  const otherTargetIds = new Set(targets.filter((t) => (realKey(t) ?? key(t)) !== own).map(fileId).filter((id) => id !== null));
   for (const copy of named) {
     const real = realKey(copy);
     if (real === null || real === own || blocked.some((t) => within(real, t) || within(key(copy), t))) continue;
+    const id = fileId(copy);
+    if (id === null || otherTargetIds.has(id)) continue;
     if (isRegularFile(copy) && sameContent(file, copy)) return copy;
   }
   return null;
