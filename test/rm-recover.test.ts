@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { runGit, type GitRunner } from '../src/rm/git.js';
 import { MAX_COPY_BYTES, MAX_NAMED_PATHS, fileRecovery, folderRecovery, namedPaths, sameContent } from '../src/rm/recover.js';
 
 const WINDOWS_ONLY = { skip: process.platform !== 'win32' && 'the rm helper runs on Windows only' };
@@ -326,5 +327,55 @@ test('a worktree whose main repository is gone is not lifted', WINDOWS_ONLY, () 
     assert.equal(folderRecovery(wt).lift, null);
   } finally {
     cleanup(wt, repo, moved);
+  }
+});
+
+test('a worktree whose HEAD cannot be read is not lifted', WINDOWS_ONLY, () => {
+  const repo = makeRepo();
+  let wt = '';
+  try {
+    commit(repo, 'a.txt', 'a');
+    wt = addWorktree(repo, 'feat', '-b', 'feat', '<wt>', 'main');
+    commit(wt, 'b.txt', 'b');
+    const failing: GitRunner = (args, env) => (args.includes('symbolic-ref') ? { status: null, stdout: '', stderr: '' } : runGit(args, env));
+    assert.equal(folderRecovery(wt, failing).lift, null);
+    assert.deepEqual(folderRecovery(wt), { lift: null, note: { kind: 'unmerged' } });
+  } finally {
+    cleanup(wt, repo);
+  }
+});
+
+test('a repository embedded as a gitlink keeps the folder', WINDOWS_ONLY, () => {
+  const repo = makeRepo();
+  try {
+    commit(repo, 'lib/a.txt', 'a');
+    const inner = path.join(repo, 'lib', 'inner');
+    fs.mkdirSync(inner);
+    git(inner, 'init', '-q', '-b', 'main');
+    commit(inner, 'f.txt', 'f');
+    git(repo, 'add', 'lib/inner');
+    git(repo, 'commit', '-q', '-m', 'embed');
+    git(repo, 'config', 'diff.ignoreSubmodules', 'all');
+    git(inner, 'checkout', '-q', '-b', 'other');
+    commit(inner, 'g.txt', 'only on other');
+    git(inner, 'checkout', '-q', 'main');
+    assert.deepEqual(folderRecovery(path.join(repo, 'lib')), { lift: null, note: { kind: 'repository', path: 'inner' } });
+    write(path.join(inner, 'f.txt'), 'edited');
+    assert.equal(folderRecovery(path.join(repo, 'lib')).lift, null);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('a wholly ignored folder names itself, and a folder inside a build folder is not judged by its ancestor', WINDOWS_ONLY, () => {
+  const repo = makeRepo();
+  try {
+    commit(repo, '.gitignore', 'tmp/\nnode_modules/\n');
+    write(path.join(repo, 'tmp', 'x.txt'));
+    write(path.join(repo, 'node_modules', 'pkg', 'i.js'));
+    assert.deepEqual(folderRecovery(path.join(repo, 'tmp')), { lift: null, note: { kind: 'untracked', path: 'tmp' } });
+    assert.equal(folderRecovery(path.join(repo, 'node_modules', 'pkg')).lift, null);
+  } finally {
+    cleanup(repo);
   }
 });

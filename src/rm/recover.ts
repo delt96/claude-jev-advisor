@@ -133,14 +133,15 @@ function isDirectory(p: string): boolean {
 }
 
 function insideRecovery(dir: string, prefix: string, git: GitRunner): Recovery {
-  const status = git(['-C', dir, 'status', '--porcelain', '-z', '--ignored', '--untracked-files=normal', '--', '.'], ICASE);
+  const status = git(['-C', dir, 'status', '--porcelain', '-z', '--ignored', '--untracked-files=normal', '--ignore-submodules=none', '--', '.'], ICASE);
   if (status.status !== 0) return NOT_LIFTED;
   const list = entries(status.stdout);
   for (let i = 0; i < list.length; i++) {
     const code = list[i].slice(0, 2);
     const full = list[i].slice(3);
     if (/[RC]/.test(code)) i++;
-    const rel = full.startsWith(prefix) ? full.slice(prefix.length) : full;
+    if (!full.startsWith(prefix)) return NOT_LIFTED;
+    const rel = full.slice(prefix.length) || win.basename(dir);
     if (code === '!!') {
       if (!rel.split('/').some((segment) => BUILD_DIRS.has(segment.toLowerCase()))) return { lift: null, note: { kind: 'untracked', path: rel } };
       continue;
@@ -148,15 +149,21 @@ function insideRecovery(dir: string, prefix: string, git: GitRunner): Recovery {
     return { lift: null, note: { kind: code === '??' ? 'untracked' : 'changed', path: rel } };
   }
   // Assume-unchanged (lowercase) and skip-worktree (S) entries hide edits from status, so any tag but H keeps the folder.
-  const tagged = git(['-C', dir, 'ls-files', '-v', '-z', '--', '.'], ICASE);
+  const tagged = git(['-C', dir, 'ls-files', '-v', '-s', '-z', '--', '.'], ICASE);
   if (tagged.status !== 0) return NOT_LIFTED;
-  const hidden = entries(tagged.stdout).find((entry) => entry[0] !== 'H');
-  if (hidden !== undefined) return { lift: null, note: { kind: 'changed', path: hidden.slice(2) } };
+  const listed = entries(tagged.stdout).map((entry) => ({ tag: entry[0], mode: entry.slice(2, 8), path: entry.slice(entry.indexOf('\t') + 1) }));
+  // A gitlink is judged by status only when dirty, and its inner repository can hold commits or edits nothing else has.
+  const inner = listed.find((entry) => entry.mode === '160000');
+  if (inner !== undefined) return { lift: null, note: { kind: 'repository', path: inner.path } };
+  const hidden = listed.find((entry) => entry.tag !== 'H');
+  if (hidden !== undefined) return { lift: null, note: { kind: 'changed', path: hidden.path } };
   return { lift: 'git' };
 }
 
 function worktreeRecovery(dir: string, git: GitRunner): Recovery {
-  const own = git(['-C', dir, 'symbolic-ref', '-q', 'HEAD']).stdout.trim();
+  const head = git(['-C', dir, 'symbolic-ref', '-q', 'HEAD']);
+  if (head.status !== 0 && head.status !== 1) return NOT_LIFTED;
+  const own = head.status === 0 ? head.stdout.trim() : '';
   const refs = git(['-C', dir, 'for-each-ref', '--contains', 'HEAD', '--format=%(refname)', 'refs/heads', 'refs/remotes']);
   if (refs.status !== 0) return NOT_LIFTED;
   const elsewhere = refs.stdout.split('\n').some((ref) => ref.trim() !== '' && ref.trim() !== own);
