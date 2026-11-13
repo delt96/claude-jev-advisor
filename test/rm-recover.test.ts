@@ -524,3 +524,28 @@ test('a hard link of another target, or of a file the command copies onto, is no
     cleanup(root);
   }
 });
+
+test('a quote glued to a word, a tilde other than ~/ and a POSIX path outside /<drive>/ leave no copy', WINDOWS_ONLY, () => {
+  const { root, other, repo, vault, s, lift } = copyFixture();
+  const V = `"${s(vault)}/n.md"`;
+  const O = `"${s(other)}/n.md"`;
+  for (const d of ['~USER', '~-']) write(path.join(root, d, 'n.md'), 'note\n');
+  const rooted = `/${s(other).slice(3)}/n.md`;
+  try {
+    assert.equal(lift(`rm ${V}; cat'/s/x' ${O}`), null);
+    assert.equal(lift(`rm ${V}; cat"/s/x" ${O}`), null);
+    assert.equal(lift(`Remove-Item ${V}; cat'/s/y.ps1' ${O}`), null);
+    assert.equal(lift(`rm'/s/x' ${V}; cat ${O}`), null);
+    assert.equal(lift(`rm ${V}; cat "${s(other)}"/n.md`), null);
+    assert.equal(lift(`rm ${V}; cat ~USER/n.md`), null);
+    assert.equal(lift(`rm ${V}; cat ~-/n.md`), null);
+    assert.equal(lift(`rm ${V}; cat "~/n.md"`), null);
+    assert.equal(lift(`rm ${V}; cat ${rooted}`), null);
+    assert.equal(lift(`rm ${V}; cat /tmp/n.md`), null);
+    assert.equal(lift(`rm ${V} && cp "${s(repo)}/n.md" ${V}`), 'copy');
+    assert.equal(lift(`rm ${V}; cat /${s(other)[0].toLowerCase()}/${s(other).slice(3)}/n.md`), 'copy');
+    assert.equal(lift(`rm ${V}; cat ${O} ~`), 'copy');
+  } finally {
+    cleanup(root);
+  }
+});

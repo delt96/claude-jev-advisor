@@ -25,10 +25,14 @@ function resolved(word: string, cwd: string, home: string): string | null {
 const DELETE_NAMES = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'ri', 'remove-item']);
 const READ_NAMES = new Set(['diff', 'fc', 'cmp', 'cat', 'type', 'get-content', 'gc', 'compare-object', 'get-filehash', 'sha256sum', 'md5sum']);
 const POWERSHELL_COPY_NAMES = new Set(['copy', 'copy-item', 'cpi']);
-// Only characters whose meaning is the same in Git Bash and PowerShell, so the split below reads the command as both
-// shells do. Everything else (subexpressions, comments, escapes, redirects, curly quotes, en dashes) gives no candidates.
+// The split below knows only quotes and statement separators, so a command with any other symbol (subexpressions,
+// comments, escapes, redirects, globs, curly quotes, en dashes) gives no candidates.
 const PLAIN_COMMAND = /^[\p{L}\p{N}\p{M} \t\r\n._\-:\\/~'";&|]*$/u;
 const ESCAPED_QUOTE_OR_LONE_CR = /\\["']|\r(?!\n)/;
+// Bash expands ~USER, ~+ and ~- and keeps a quoted ~, while resolved() reads only an unquoted ~/ prefix.
+const LEADING_TILDE = /(?<![^\s;&|])~(?![^\\/\s;&|])/g;
+// Git Bash maps every other absolute POSIX path to its own mounts (/tmp) or install folder (/usr, /etc).
+const MSYS_ONLY_PATH = /^\/(?![A-Za-z](?:\/|$))/;
 
 function splitStatements(command: string): string[] {
   const out: string[] = [];
@@ -101,13 +105,18 @@ function fileId(p: string): string | null {
 // and plain copies onto a deleted file, with no redirect, assignment, directory change or other tool: any other
 // statement can overwrite a candidate in ways that cannot be read from its words, so then there are no candidates.
 export function readOnlyPaths(command: string, cwd: string, home: string, targets: string[]): string[] {
-  if (!PLAIN_COMMAND.test(command) || ESCAPED_QUOTE_OR_LONE_CR.test(command)) return [];
+  if (!PLAIN_COMMAND.test(command) || ESCAPED_QUOTE_OR_LONE_CR.test(command) || command.replace(LEADING_TILDE, '').includes('~')) return [];
   const deleted = new Set(targets.map((t) => win.normalize(t).replace(/\\+$/, '').toLowerCase()));
   const found: string[] = [];
   const written: string[] = [];
   for (const statement of splitStatements(command)) {
-    const words = [...statement.matchAll(WORD)].map((m) => m[1] ?? m[2] ?? m[3] ?? '');
-    if (words.length === 0) continue;
+    const pieces = [...statement.matchAll(WORD)];
+    if (pieces.length === 0) continue;
+    // The shell joins pieces with nothing between them into one word: cat'/s/x' runs ./cat/s/x.
+    const glued = pieces.some((m, i) => i > 0 && (pieces[i - 1].index ?? 0) + pieces[i - 1][0].length === m.index);
+    if (glued || pieces[0][3] === undefined) return [];
+    const words = pieces.map((m) => m[1] ?? m[2] ?? m[3] ?? '');
+    if (words.some((w) => MSYS_ONLY_PATH.test(w))) return [];
     // A command named with a folder (./cat, C:\x\cat.exe) can be any script.
     if (/[\\/:]/.test(words[0])) return [];
     const name = words[0].toLowerCase().replace(/\.exe$/, '');
