@@ -35,14 +35,10 @@ export function namedPaths(command: string, cwd: string, home: string): string[]
   return found;
 }
 
-type Mention = { text: string; path: string | null; redirected: boolean };
-
-const COPY_COMMANDS = new Set(['cp', 'copy', 'copy-item', 'cpi', 'xcopy']);
-const READ_COMMANDS = new Set(['diff', 'fc', 'cmp', 'cat', 'type', 'get-content', 'gc', 'compare-object', 'get-filehash', 'sha256sum', 'md5sum']);
-
-const PS_SWITCHES = /^-(?:force|recurse|container|passthru|whatif|confirm)$/i;
-const CP_FLAGS = /^(?:-[frpavniuRdPHLx]+|--(?:force|recursive|preserve(?:=\S+)?|verbose|no-clobber|update|interactive|archive|dereference|no-dereference))$/;
-const DIRECTORY_CHANGERS = new Set(['cd', 'chdir', 'sl', 'set-location', 'pushd']);
+const DELETE_NAMES = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'ri', 'remove-item']);
+const READ_NAMES = new Set(['diff', 'fc', 'cmp', 'cat', 'type', 'get-content', 'gc', 'compare-object', 'get-filehash', 'sha256sum', 'md5sum']);
+const COPY_NAMES = new Set(['cp', 'copy', 'copy-item', 'cpi']);
+const ANY_REDIRECT_OR_SUBSTITUTION = /[<>`$]/;
 
 function splitStatements(command: string): string[] {
   const out: string[] = [];
@@ -57,8 +53,7 @@ function splitStatements(command: string): string[] {
     }
     if (c === '"' || c === "'") quote = c;
     const doubled = command.slice(i, i + 2);
-    const lone = c === '&' && !/[<>]/.test(command[i - 1] ?? '');
-    if (doubled === '&&' || doubled === '||' || c === ';' || c === '|' || c === '\n' || c === '\r' || lone) {
+    if (doubled === '&&' || doubled === '||' || c === ';' || c === '|' || c === '\n' || c === '\r' || c === '&') {
       out.push(current);
       current = '';
       if (doubled === '&&' || doubled === '||') i++;
@@ -70,87 +65,71 @@ function splitStatements(command: string): string[] {
   return out;
 }
 
-const isOption = (text: string) => /^-/.test(text) || /^\/[A-Za-z?](?::\S*)?$/.test(text);
+const SLASH_OPTION = /^\/[A-Za-z?]$/;
 
-// The words of a statement that only read their file: sources of a copy, the existing file of a hard link, any operand
-// of a viewer or hasher. Anything else (a destination, a redirect target, an unknown command, an assignment) is not.
-function readWords(words: Mention[]): Set<Mention> {
-  const reads = new Set<Mention>();
-  if (words.length === 0 || words[0].redirected) return reads;
-  const name = (words[0].text.split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.exe$/, '');
-  const rest = words.slice(1).filter((w) => !w.redirected);
-  const operands = rest.filter((w) => !isOption(w.text));
-  if (READ_COMMANDS.has(name)) {
-    for (const w of operands) reads.add(w);
-  } else if (COPY_COMMANDS.has(name)) {
-    let named = false;
-    let targetDir = false;
-    let unknown = false;
-    const sources: Mention[] = [];
-    const positional: Mention[] = [];
-    for (let i = 0; i < rest.length; i++) {
-      const text = rest[i].text;
-      if (/^-destination$/i.test(text)) {
-        named = true;
-        i++;
-      } else if (/^-(?:path|literalpath)$/i.test(text) && rest[i + 1]) {
-        sources.push(rest[++i]);
-      } else if (/^(?:-t|--target-directory(?:=.*)?)$/.test(text)) {
-        targetDir = true;
-        if (!text.includes('=')) i++;
-      } else if (PS_SWITCHES.test(text) || CP_FLAGS.test(text)) {
-        continue;
-      } else if (text.startsWith('-')) {
-        unknown = true;
-      } else if (!isOption(text)) {
-        positional.push(rest[i]);
-      }
+function operandPath(text: string, cwd: string, home: string): string | null {
+  if (NOT_LITERAL.test(text) || text.startsWith('-') || SLASH_OPTION.test(text)) return null;
+  return resolved(text, cwd, home) ?? win.resolve(cwd, text);
+}
+
+// A plain copy: two path operands, only -f/-Force and the exact parameter names -Path, -LiteralPath and -Destination.
+function copySides(args: string[]): { source: string; destination: string } | null {
+  const positional: string[] = [];
+  let source: string | null = null;
+  let destination: string | null = null;
+  for (let i = 0; i < args.length; i++) {
+    const lower = args[i].toLowerCase();
+    if (lower === '-f' || lower === '-force') continue;
+    if (lower === '-path' || lower === '-literalpath') {
+      if (source !== null || i + 1 >= args.length) return null;
+      source = args[++i];
+    } else if (lower === '-destination') {
+      if (destination !== null || i + 1 >= args.length) return null;
+      destination = args[++i];
+    } else if (args[i].startsWith('-') || SLASH_OPTION.test(args[i])) {
+      return null;
+    } else {
+      positional.push(args[i]);
     }
-    // A named parameter outside the known set may take a value that looks like an operand, which would shift the destination.
-    if (!targetDir && !unknown) {
-      if (named) sources.push(...positional);
-      else if (positional.length >= 2) sources.push(...positional.slice(0, -1));
-      for (const w of sources) reads.add(w);
-    }
-  } else if (name === 'fsutil' && rest[0]?.text.toLowerCase() === 'hardlink' && rest[1]?.text.toLowerCase() === 'create') {
-    if (rest[3]) reads.add(rest[3]);
-  } else if (name === 'certutil' && rest.some((w) => w.text.toLowerCase() === '-hashfile')) {
-    for (const w of operands) reads.add(w);
-  } else if (name === 'mklink' && rest.some((w) => w.text.toLowerCase() === '/h')) {
-    if (operands[1]) reads.add(operands[1]);
   }
-  return reads;
+  if (positional.length + (source === null ? 0 : 1) + (destination === null ? 0 : 1) !== 2) return null;
+  source ??= positional.shift() as string;
+  destination ??= positional.shift() as string;
+  return { source, destination };
 }
 
-// Slashless words are resolved too, but only so a write or unknown mention of `n.md` can disqualify the file in the
-// current folder; a `name=path` word is a mention of that path.
-function mentionPath(text: string, cwd: string, home: string): string | null {
-  const assigned = /^[A-Za-z_]\w*=(.+)$/.exec(text);
-  const value = assigned ? assigned[1] : text;
-  const full = resolved(value, cwd, home);
-  if (full !== null || /[\\/]/.test(value) || NOT_LITERAL.test(value) || value.startsWith('-')) return full;
-  return win.resolve(cwd, value);
-}
-
-// Paths the command only reads. A path that is also written, redirected to, or named by a command not known to only
-// read is left out, so an identical "copy" that the same command overwrites never counts.
-export function readOnlyPaths(command: string, cwd: string, home: string): Set<string> {
-  const verdict = new Map<string, boolean>();
+// Files a command only reads or replaces with their own copy. The whole command has to be made of deletes, plain reads
+// and plain copies onto a deleted file, with no redirect, assignment, directory change or other tool: any other
+// statement can overwrite a candidate in ways that cannot be read from its words, so then there are no candidates.
+export function readOnlyPaths(command: string, cwd: string, home: string, targets: string[]): string[] {
+  if (ANY_REDIRECT_OR_SUBSTITUTION.test(command)) return [];
+  const deleted = new Set(targets.map((t) => win.normalize(t).replace(/\\+$/, '').toLowerCase()));
+  const found: string[] = [];
   for (const statement of splitStatements(command)) {
-    const words: Mention[] = [];
-    for (const match of statement.matchAll(WORD)) {
-      const text = match[1] ?? match[2] ?? match[3] ?? '';
-      words.push({ text, path: mentionPath(text, cwd, home), redirected: /[<>]\s*$/.test(statement.slice(0, match.index)) });
-    }
-    if (DIRECTORY_CHANGERS.has((words[0]?.text ?? '').toLowerCase())) return new Set();
-    const reads = readWords(words);
-    for (const w of words) {
-      if (w.path === null) continue;
-      const k = w.path.toLowerCase();
-      verdict.set(k, (verdict.get(k) ?? true) && reads.has(w));
+    const words = [...statement.matchAll(WORD)].map((m) => m[1] ?? m[2] ?? m[3] ?? '');
+    if (words.length === 0) continue;
+    const name = (words[0].split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.exe$/, '');
+    const args = words.slice(1);
+    if (DELETE_NAMES.has(name)) continue;
+    if (READ_NAMES.has(name) && !args.some((a) => a.startsWith('-') || SLASH_OPTION.test(a))) {
+      for (const a of args) found.push(operandPath(a, cwd, home) ?? '');
+    } else if (name === 'certutil' && (args.length === 2 || args.length === 3) && args[0].toLowerCase() === '-hashfile') {
+      found.push(operandPath(args[1], cwd, home) ?? '');
+    } else if (COPY_NAMES.has(name)) {
+      const sides = copySides(args);
+      const destination = sides ? operandPath(sides.destination, cwd, home) : null;
+      if (!sides || destination === null || !deleted.has(destination.toLowerCase())) return [];
+      found.push(operandPath(sides.source, cwd, home) ?? '');
+    } else {
+      return [];
     }
   }
-  return new Set([...verdict].filter(([, ok]) => ok).map(([k]) => k));
+  const seen = new Set<string>();
+  return found.filter((p) => {
+    if (p === '' || seen.has(p.toLowerCase())) return false;
+    seen.add(p.toLowerCase());
+    return true;
+  }).slice(0, MAX_NAMED_PATHS);
 }
 
 const withoutCarriageReturns = (data: Buffer) => data.toString('latin1').replace(/\r\n/g, '\n');
@@ -336,8 +315,7 @@ export const MAX_RECOVER_TARGETS = 10;
 
 // The clock is also checked before every git call, so a target that starts just inside the budget runs at most one call past it.
 export function recoverTargets(paths: string[], command: string, cwd: string, home: string, outOfTime: () => boolean, git: GitRunner = runGit): Recovery[] {
-  const readable = readOnlyPaths(command, cwd, home);
-  const named = namedPaths(command, cwd, home).filter((p) => readable.has(p.toLowerCase()));
+  const named = readOnlyPaths(command, cwd, home, paths);
   const limited: GitRunner = (args, env) => (outOfTime() ? { status: null, stdout: '', stderr: '' } : git(args, env));
   return paths.map((target) => {
     if (outOfTime()) return NOT_LIFTED;

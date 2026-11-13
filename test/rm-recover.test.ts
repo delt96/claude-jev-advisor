@@ -391,92 +391,76 @@ test('recoverTargets stops checking once out of time', () => {
   assert.deepEqual(results[1], { lift: null, note: null });
 });
 
-test('a named file counts as a copy only when the command just reads it', WINDOWS_ONLY, () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-copy-'));
-  const vault = path.join(root, 'vault');
-  const other = path.join(root, 'other');
-  const repo = path.join(root, 'repo');
-  for (const d of [vault, other, repo]) fs.mkdirSync(d);
-  for (const d of [vault, other, repo]) fs.writeFileSync(path.join(d, 'n.md'), 'note\n');
-  fs.writeFileSync(path.join(root, 'x.md'), 'x\n');
-  const nogit: GitRunner = () => ({ status: 128, stdout: '', stderr: 'fatal: not a git repository' });
-  const s = (p: string) => p.replace(/\\/g, '/');
-  const lift = (command: string, target = path.join(vault, 'n.md')) => recoverTargets([target], command, root, 'C:\\Users\\me', () => false, nogit)[0].lift;
-  try {
-    assert.equal(lift(`rm "${s(vault)}/n.md" && cp "${s(root)}/x.md" "${s(other)}/n.md"`), null);
-    assert.equal(lift(`rm "${s(vault)}/n.md"; echo x > "${s(other)}/n.md"`), null);
-    assert.equal(lift(`rm "${s(vault)}/n.md"; echo x >> "${s(other)}/n.md"`), null);
-    assert.equal(lift(`rm "${s(vault)}/n.md"; echo x | tee "${s(other)}/n.md"`), null);
-    assert.equal(lift(`rm "${s(vault)}/n.md"; mv "${s(root)}/x.md" "${s(other)}/n.md"`), null);
-    assert.equal(lift(`rm "${s(vault)}/n.md"; cp -t "${s(root)}" "${s(other)}/n.md"`), null);
-    assert.equal(lift(`rm "${s(vault)}/n.md"; cp "${s(other)}/n.md" "${s(root)}/x.md"; echo > "${s(other)}/n.md"`), null);
-    assert.equal(lift(`rm "${s(vault)}/n.md" && cp "${s(repo)}/n.md" "${s(vault)}/n.md"`), 'copy');
-    assert.equal(lift(`diff "${s(repo)}/n.md" "${s(vault)}/n.md" && rm "${s(vault)}/n.md"`), 'copy');
-    assert.equal(lift(`Copy-Item "${s(root)}/x.md" -Destination "${s(repo)}/n.md"; Remove-Item "${s(vault)}/n.md"`), null);
-    assert.equal(lift(`Copy-Item "${s(repo)}/n.md" -Destination "${s(root)}/x.md"; Remove-Item "${s(vault)}/n.md"`), 'copy');
-    assert.equal(lift(`$v = "${s(repo)}/n.md"; rm "${s(vault)}/n.md"`), null);
-  } finally {
-    cleanup(root);
-  }
-});
-
 function copyFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-copy-'));
-  const dirs = { vault: path.join(root, 'vault'), other: path.join(root, 'other'), repo: path.join(root, 'repo') };
+  const dirs = { vault: path.join(root, 'vault'), other: path.join(root, 'other'), repo: path.join(root, 'repo'), sub: path.join(root, 'sub') };
   for (const d of Object.values(dirs)) {
     fs.mkdirSync(d);
     fs.writeFileSync(path.join(d, 'n.md'), 'note\n');
   }
+  fs.writeFileSync(path.join(root, 'x.md'), 'x\n');
   const nogit: GitRunner = () => ({ status: 128, stdout: '', stderr: 'fatal: not a git repository' });
   const s = (p: string) => p.replace(/\\/g, '/');
   const lift = (command: string, cwd = root) => recoverTargets([path.join(dirs.vault, 'n.md')], command, cwd, 'C:\\Users\\me', () => false, nogit)[0].lift;
   return { root, ...dirs, s, lift };
 }
 
-test('Copy-Item and cp with a named parameter we do not know give no read positions', WINDOWS_ONLY, () => {
-  const { root, other, repo, vault, s, lift } = copyFixture();
-  const rm = `Remove-Item "${s(vault)}/n.md"`;
-  try {
-    assert.equal(lift(`${rm}; Copy-Item "${s(repo)}/n.md" "${s(other)}/n.md" -ErrorAction Stop`), null);
-    assert.equal(lift(`${rm}; cp "${s(repo)}/n.md" "${s(other)}/n.md" -EA SilentlyContinue`), null);
-    assert.equal(lift(`${rm}; Copy-Item -Destination:"${s(other)}/n.md" "${s(repo)}/n.md"`), null);
-    assert.equal(lift(`${rm}; Copy-Item -Desti "${s(other)}/n.md" "${s(repo)}/n.md"`), null);
-    assert.equal(lift(`${rm}; Copy-Item "${s(repo)}/n.md" "${s(root)}/x.md" -Force`), 'copy');
-    assert.equal(lift(`${rm}; cp -f "${s(repo)}/n.md" "${s(root)}/x.md"`), 'copy');
-  } finally {
-    cleanup(root);
-  }
-});
-
-test('a slashless mention in a write position disqualifies the file in the current folder', WINDOWS_ONLY, () => {
-  const { root, other, repo, vault, s, lift } = copyFixture();
-  try {
-    assert.equal(lift(`rm "${s(vault)}/n.md"; cat "${s(other)}/n.md"; echo x > n.md`, other), null);
-    assert.equal(lift(`rm "${s(vault)}/n.md"; cat "${s(other)}/n.md"`, other), 'copy');
-    assert.equal(lift(`cd "${s(other)}"; rm "${s(vault)}/n.md"; cat "${s(repo)}/n.md"`), null);
-    assert.equal(lift(`Set-Location "${s(other)}"; Remove-Item "${s(vault)}/n.md"; cat "${s(repo)}/n.md"`), null);
-  } finally {
-    cleanup(root);
-  }
-});
-
-test('certutil operands read only with -hashfile', WINDOWS_ONLY, () => {
+test('a named file counts as a copy only when every statement of the command is a delete, a plain read or a plain copy onto the deleted file', WINDOWS_ONLY, () => {
   const { root, other, repo, vault, s, lift } = copyFixture();
   const rm = `rm "${s(vault)}/n.md"`;
   try {
-    assert.equal(lift(`${rm}; certutil -f -decode "${s(repo)}/n.md" "${s(other)}/n.md"`), null);
-    assert.equal(lift(`${rm}; certutil -urlcache -f http://x.y/z "${s(other)}/n.md"`), null);
+    assert.equal(lift(`${rm} && cp "${s(root)}/x.md" "${s(other)}/n.md"`), null);
+    assert.equal(lift(`${rm}; echo x > "${s(other)}/n.md"; cat "${s(other)}/n.md"`), null);
+    assert.equal(lift(`${rm}; cat "${s(other)}/n.md"; echo x >> "${s(other)}/n.md"`), null);
+    assert.equal(lift(`${rm}; cat "${s(other)}/n.md" | tee "${s(other)}/n.md"`), null);
+    assert.equal(lift(`${rm}; mv "${s(root)}/x.md" "${s(other)}/n.md"; cat "${s(other)}/n.md"`), null);
+    assert.equal(lift(`${rm}; cp -t "${s(root)}" "${s(other)}/n.md"`), null);
+    assert.equal(lift(`$v = "${s(repo)}/n.md"; ${rm}`), null);
+    assert.equal(lift(`p=${s(other)}/n.md; ${rm}; cat "${s(other)}/n.md"; cp "${s(repo)}/n.md" "$p"`), null);
+    assert.equal(lift(`${rm} && cp "${s(repo)}/n.md" "${s(vault)}/n.md"`), 'copy');
+    assert.equal(lift(`diff "${s(repo)}/n.md" "${s(vault)}/n.md" && ${rm}`), 'copy');
+    assert.equal(lift(`Copy-Item "${s(root)}/x.md" -Destination "${s(repo)}/n.md"; Remove-Item "${s(vault)}/n.md"`), null);
+    assert.equal(lift(`Remove-Item "${s(vault)}/n.md"; Copy-Item "${s(repo)}/n.md" -Destination "${s(vault)}/n.md"`), 'copy');
+    assert.equal(lift(`${rm}; cat n.md`, other), 'copy');
     assert.equal(lift(`${rm}; certutil -hashfile "${s(repo)}/n.md" SHA256`), 'copy');
+    assert.equal(lift(`${rm}; certutil -f -decode "${s(repo)}/n.md" "${s(other)}/n.md"`), null);
   } finally {
     cleanup(root);
   }
 });
 
-test('a name=path assignment disqualifies the path', WINDOWS_ONLY, () => {
-  const { root, other, vault, s, lift } = copyFixture();
+test('a copy statement with an option outside -f, -Force and the exact parameter names is not a plain copy', WINDOWS_ONLY, () => {
+  const { root, other, repo, vault, s, lift } = copyFixture();
+  const src = `"${s(repo)}/n.md"`;
+  const dst = `"${s(vault)}/n.md"`;
   try {
-    assert.equal(lift(`p=${s(other)}/n.md; rm "${s(vault)}/n.md"; cat "${s(other)}/n.md"; echo x > "$p"`), null);
-    assert.equal(lift(`p="${s(other)}/n.md"; rm "${s(vault)}/n.md"; cat "${s(other)}/n.md"; echo x > "$p"`), null);
+    for (const extra of ['-pv v', '-pi v', '-iv v', '-fi x.md', '-ErrorAction Stop', '-EA SilentlyContinue', '-Desti x', '-Destination:x']) {
+      assert.equal(lift(`Remove-Item ${dst}; Copy-Item ${src} ${dst} ${extra}`), null, extra);
+    }
+    assert.equal(lift(`Remove-Item ${dst}; Copy-Item "${s(other)}/n.md" -L ${src}`), null);
+    assert.equal(lift(`Remove-Item ${dst}; Copy-Item ${src} ${dst} -L ${src}`), null);
+    assert.equal(lift(`rm ${dst}; cp -f ${src} ${dst}`), 'copy');
+    assert.equal(lift(`Remove-Item ${dst}; Copy-Item ${src} ${dst} -Force`), 'copy');
+    assert.equal(lift(`Remove-Item ${dst}; Copy-Item -Path ${src} -Destination ${dst}`), 'copy');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('a directory change, a directory destination or a tool that writes by its own rules leaves no copy', WINDOWS_ONLY, () => {
+  const { root, other, repo, sub, vault, s, lift } = copyFixture();
+  const rm = `rm "${s(vault)}/n.md"`;
+  try {
+    assert.equal(lift(`Push-Location "${s(other)}"; ${rm}; cat "${s(repo)}/n.md"`), null);
+    assert.equal(lift(`cd "${s(other)}"; ${rm}; cat "${s(repo)}/n.md"`), null);
+    assert.equal(lift(`Set-Location "${s(other)}"; ${rm}; cat "${s(repo)}/n.md"`), null);
+    assert.equal(lift(`${rm}; cat "${s(other)}/n.md"; cp "${s(sub)}/n.md" "${s(other)}/"`), null);
+    assert.equal(lift(`Remove-Item "${s(vault)}/n.md"; cat "${s(other)}/n.md"; Copy-Item "${s(sub)}/n.md" -Destination "${s(other)}"`), null);
+    assert.equal(lift(`${rm}; cat "${s(other)}/n.md"; git -C "${s(other)}" checkout -- n.md`), null);
+    assert.equal(lift(`${rm}; cat "${s(other)}/n.md"; tar -C "${s(other)}" -xf a.tar`), null);
+    assert.equal(lift(`${rm}; cp "${s(repo)}/n.md" "${s(root)}/x.md"`), null);
+    assert.equal(lift(`cat -n "${s(other)}/n.md" && ${rm}`), null);
+    assert.equal(lift(`${rm}; cat "${s(other)}/n.md"; bash -c "echo x > n.md"`), null);
   } finally {
     cleanup(root);
   }
