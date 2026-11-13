@@ -79,7 +79,7 @@ test('a refused ask, an ask with no result, and a deleted session are named', ()
   const home = newHome();
   const main = writeJsonl(path.join(home, 'transcripts', 'sess-rm-0001.jsonl'), [
     toolUse(at(9), 'tu-1', 'rm one'),
-    toolResult(at(9, 0, 15), 'tu-1', { toolUseResult: { toolDenialKind: 'user-rejected' } }),
+    toolResult(at(9, 0, 15), 'tu-1', { toolUseResult: 'User rejected tool use', toolDenialKind: 'user-rejected' }),
     toolUse(at(10), 'tu-2', 'rm two'),
   ]);
   const released = path.join(home, 'other', 'sess-rm-0001.jsonl');
@@ -131,4 +131,41 @@ test('the report shows the rm section in both modes', () => {
   logOf(home, [rmRecord(at(9))]);
   assert.ok(reportLines(home, NOW, 7).includes('rm in the last 7 days: 1 commands with real targets'));
   assert.ok(reportLines(home, NOW, 7, { turns: true }).includes('rm in the last 7 days: 1 commands with real targets'));
+});
+
+test('a refusal is read from the top-level denial kind, a nested one, or the rejection text of an error result', () => {
+  const home = newHome();
+  const rejected = { type: 'user', timestamp: at(9, 0, 5), message: { content: [{ type: 'tool_result', tool_use_id: 'tu-3', is_error: true, content: [{ type: 'text', text: "The user doesn't want to proceed with this tool use." }] }] } };
+  const hookError = { type: 'user', timestamp: at(9, 0, 5), message: { content: [{ type: 'tool_result', tool_use_id: 'tu-4', is_error: true, content: 'hook failed' }] } };
+  const main = writeJsonl(path.join(home, 't.jsonl'), [
+    toolResult(at(9, 0, 5), 'tu-1', { toolUseResult: 'User rejected tool use', toolDenialKind: 'user-rejected' }),
+    toolResult(at(9, 0, 5), 'tu-2', { toolUseResult: { toolDenialKind: 'user-rejected' } }),
+    rejected,
+    hookError,
+  ]);
+  const kind = (id: string) => askAnswer(rmRecord(at(9), { transcriptPath: main, toolUseId: id })).kind;
+  assert.deepEqual(['tu-1', 'tu-2', 'tu-3', 'tu-4'].map(kind), ['refused', 'refused', 'refused', 'approved']);
+});
+
+test('the same command run twice is matched to the call nearest the ask, and a negative wait is unknown', () => {
+  const home = newHome();
+  const main = writeJsonl(path.join(home, 't.jsonl'), [
+    toolUse(at(9), 'tu-1', 'rm -rf dist'),
+    toolResult(at(9, 0, 10), 'tu-1', { toolUseResult: 'User rejected tool use', toolDenialKind: 'user-rejected' }),
+    toolUse(at(9, 3), 'tu-2', 'rm -rf dist'),
+    toolResult(at(9, 3, 20), 'tu-2'),
+  ]);
+  const first = askAnswer(rmRecord(at(9), { transcriptPath: main, command: 'rm -rf dist' }));
+  const second = askAnswer(rmRecord(at(9, 3), { transcriptPath: main, command: 'rm -rf dist' }));
+  assert.deepEqual(first, { kind: 'refused', waitMs: 10000 });
+  assert.deepEqual(second, { kind: 'approved', waitMs: 20000 });
+  const early = askAnswer(rmRecord(at(9, 5), { transcriptPath: main, toolUseId: 'tu-1' }));
+  assert.deepEqual(early, { kind: 'refused', waitMs: null });
+});
+
+test('a result copy without a timestamp is ignored when a timed one exists', () => {
+  const home = newHome();
+  const blob = { type: 'system', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-1' }] } };
+  const main = writeJsonl(path.join(home, 't.jsonl'), [toolUse(at(9), 'tu-1', 'rm one'), blob, toolResult(at(9, 0, 30), 'tu-1')]);
+  assert.deepEqual(askAnswer(rmRecord(at(9), { transcriptPath: main, toolUseId: 'tu-1' })), { kind: 'approved', waitMs: 30000 });
 });

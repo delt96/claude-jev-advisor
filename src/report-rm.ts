@@ -7,6 +7,7 @@ import { localTime, transcriptGone } from './report.js';
 export const LIST_LINES = 20;
 export const ANSWER_WINDOW_MS = 10 * 60 * 1000;
 export const LONG_WAIT_MS = 10 * 60 * 1000;
+const LOOKBACK_MS = 60 * 1000;
 
 export type AskAnswer = { kind: 'approved' | 'refused' | 'no_answer' | 'deleted' | 'unknown'; waitMs: number | null };
 
@@ -34,60 +35,79 @@ function contentOf(entry: Entry): Record<string, unknown>[] {
   return isRecord(message) && Array.isArray(message.content) ? message.content.filter(isRecord) : [];
 }
 
-function readEntries(file: string): Entry[] | null {
-  try {
-    return parseLines(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return null;
+type EntryCache = Map<string, Entry[] | null>;
+
+function readEntries(file: string, cache: EntryCache): Entry[] | null {
+  if (!cache.has(file)) {
+    try {
+      cache.set(file, parseLines(fs.readFileSync(file, 'utf8')));
+    } catch {
+      cache.set(file, null);
+    }
   }
+  return cache.get(file) ?? null;
 }
 
-function transcriptSet(record: LogRecord): Entry[][] | null {
+function transcriptEntries(record: LogRecord, cache: EntryCache): Entry[] | null {
   if (typeof record.transcriptPath !== 'string') return null;
-  const main = readEntries(record.transcriptPath);
+  const main = readEntries(record.transcriptPath, cache);
   if (!main) return null;
-  const sets = [main];
+  const all = [...main];
   if (typeof record.sessionId === 'string') {
     const dir = path.join(path.dirname(record.transcriptPath), record.sessionId, 'subagents');
     let names: string[] = [];
     try {
       names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl'));
     } catch {}
-    for (const name of names) {
-      const entries = readEntries(path.join(dir, name));
-      if (entries) sets.push(entries);
-    }
+    for (const name of names) all.push(...(readEntries(path.join(dir, name), cache) ?? []));
   }
-  return sets;
+  return all;
 }
 
-export function askAnswer(record: LogRecord): AskAnswer {
-  const sets = transcriptSet(record);
-  if (!sets) {
+function blockText(block: Record<string, unknown>): string {
+  const content = block.content;
+  if (typeof content === 'string') return content;
+  return Array.isArray(content) ? content.map((c) => (isRecord(c) && typeof c.text === 'string' ? c.text : '')).join(' ') : '';
+}
+
+function isRefusal(entry: Entry, block: Record<string, unknown>): boolean {
+  if (typeof entry.toolDenialKind === 'string') return true;
+  if (isRecord(entry.toolUseResult) && typeof entry.toolUseResult.toolDenialKind === 'string') return true;
+  return block.is_error === true && blockText(block).includes("doesn't want to proceed");
+}
+
+export function askAnswer(record: LogRecord, cache: EntryCache = new Map()): AskAnswer {
+  const entries = transcriptEntries(record, cache);
+  if (!entries) {
     const gone = typeof record.transcriptPath === 'string' && typeof record.sessionId === 'string' && transcriptGone(record.transcriptPath, record.sessionId);
     return { kind: gone ? 'deleted' : 'unknown', waitMs: null };
   }
-  const entries = sets.flat();
   const askedAt = timeOf(record.at);
   let id = typeof record.toolUseId === 'string' ? record.toolUseId : null;
   if (id === null) {
-    // The tool_use entry can be written a moment before the hook runs, so the window reaches back as well.
+    let best = Infinity;
     for (const entry of entries) {
       const time = timeOf(entry.timestamp);
-      if (!Number.isNaN(askedAt) && !(Math.abs(time - askedAt) <= ANSWER_WINDOW_MS)) continue;
+      if (!Number.isNaN(askedAt) && !(time >= askedAt - LOOKBACK_MS && time <= askedAt + ANSWER_WINDOW_MS)) continue;
       const call = contentOf(entry).find((c) => c.type === 'tool_use' && (c.name === 'Bash' || c.name === 'PowerShell') && isRecord(c.input) && c.input.command === record.command);
-      if (call && typeof call.id === 'string') {
+      const distance = Number.isNaN(askedAt) ? 0 : Math.abs(time - askedAt);
+      if (call && typeof call.id === 'string' && distance < best) {
         id = call.id;
-        break;
+        best = distance;
       }
     }
   }
   if (id !== null) {
+    const results: { entry: Entry; block: Record<string, unknown> }[] = [];
     for (const entry of entries) {
-      if (!contentOf(entry).some((c) => c.type === 'tool_result' && c.tool_use_id === id)) continue;
-      const refused = isRecord(entry.toolUseResult) && typeof entry.toolUseResult.toolDenialKind === 'string';
-      const wait = timeOf(entry.timestamp) - askedAt;
-      return { kind: refused ? 'refused' : 'approved', waitMs: Number.isNaN(wait) ? null : Math.max(0, wait) };
+      const block = contentOf(entry).find((c) => c.type === 'tool_result' && c.tool_use_id === id);
+      if (block) results.push({ entry, block });
+    }
+    // Some entries repeat a tool_result without a timestamp; a timed one is the real result.
+    const found = results.find((r) => !Number.isNaN(timeOf(r.entry.timestamp))) ?? results[0];
+    if (found) {
+      const wait = timeOf(found.entry.timestamp) - askedAt;
+      return { kind: isRefusal(found.entry, found.block) ? 'refused' : 'approved', waitMs: Number.isNaN(wait) || wait < 0 ? null : wait };
     }
   }
   return { kind: 'no_answer', waitMs: null };
@@ -163,7 +183,8 @@ export function rmReportLines(home: string, now: Date, days: number): string[] {
     lines.push(...capped(passed.map((r) => `${stamp(r)}${targetsOf(r).map((t) => liftName(t, legacy(r))).join(', ')}`)));
   }
   if (asked.length) {
-    const answers = asked.map((r) => askAnswer(r));
+    const cache: EntryCache = new Map();
+    const answers = asked.map((r) => askAnswer(r, cache));
     const count = (kind: AskAnswer['kind']) => answers.filter((a) => a.kind === kind).length;
     const waits = answers.map((a) => a.waitMs).filter((w): w is number => w !== null);
     const mid = median(waits);
