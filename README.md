@@ -5,14 +5,14 @@ Unofficial helpers for [Claude Code](https://claude.com/claude-code), installed 
 What is sent to TypeSafe's Jev API (`api.typesafe.ai`):
 
 - `context`: your last three requests (typed by you, or sent through a channel or from another Claude Code session), each cut to its first 1,000 characters, and Claude's last reply, cut to its first and last 1,500 characters.
-- `rm`: only for a delete it would otherwise ask about, and only when the target is a file this session made or a folder git ignores. It sends the path, the delete command and its description, up to three tool calls of this session that name the target (each cut to 600 characters), and for a folder up to ten of its file names.
+- `rm`: only for a delete it would otherwise ask about that cannot be restored, and only when the target is a file this session made or a folder git ignores. It sends the path, the delete command and its description, up to three tool calls of this session that name the target (each cut to 600 characters), and for a folder up to ten of its file names.
 
 Not affiliated with Anthropic or TypeSafe.
 
 | Helper | What it does | Systems |
 |---|---|---|
 | `context` | At the end of each turn, suggests `/compact` or `/clear` when the conversation is large and the work has reached a stopping point. Shown at the end of Claude Code's bottom row. | Any |
-| `rm` | Asks before a Bash or PowerShell command deletes real files (`rm`, `Remove-Item`, `del`, `rd`, also inside `sh -c`, `powershell -Command` or `cmd /c`). Lets temp files through and refuses a delete whose targets it cannot work out. Jev can lift the ask for a test file this session made or a folder git ignores. | Windows |
+| `rm` | Asks before a Bash or PowerShell command deletes real files (`rm`, `Remove-Item`, `del`, `rd`, also inside `sh -c`, `powershell -Command` or `cmd /c`). Lets temp files through and refuses a delete whose targets it cannot work out. The ask is lifted when every target can be restored from git or from an identical copy, and Jev can lift it for a test file this session made or a folder git ignores. | Windows |
 
 ## Requirements
 
@@ -51,7 +51,7 @@ The hooks also reach Claude Code sessions that are already open. The bottom-row 
 | `claude-jev-advisor uninstall [rm] [context]` | Removes this package's hooks and display from `settings.json` |
 | `claude-jev-advisor on [rm] [context]` / `off [rm] [context]` | Switches helpers on or off without touching `settings.json` |
 | `claude-jev-advisor status` | Shows what is registered and on, the display, the shortcut, whether a key is set, the thresholds and the last judgment |
-| `claude-jev-advisor report [--days 7]` | Lists the `/compact` and `/clear` advice shown and what followed it, and the deletions Jev let through |
+| `claude-jev-advisor report [--days 7] [--turns]` | Lists the advice by episode with what followed (compacted, cleared, compacted while away, auto-compacted at the limit, kept going, session deleted), marks band presses, and summarizes the `rm` decisions with your answers and waits |
 | `claude-jev-advisor key` | Asks for the TypeSafe API key, checks it and saves it (needs an interactive terminal) |
 | `claude-jev-advisor help` | Prints the usage |
 
@@ -95,7 +95,7 @@ Judging starts at 250k because a conversation passes 100k after a request or two
 
 With the `mod` display the band's advice is also written to `advice/<session>.json` in the data folder, as `{ "kind": "compact" | "clear" | null, "at": … }`, when it changes. [claude-alarm](https://www.npmjs.com/package/@delt/claude-alarm) 1.9 or later reads it to highlight the matching `/compact` or `/clear` button on its dashboard. A session that never had advice gets no file.
 
-`claude-jev-advisor report` shows each piece of advice with the time, the session, the size, Jev's answers, the start of the last request and what followed: compacted or cleared within the next three requests, auto-compacted, or kept going.
+`claude-jev-advisor report` lists the advice by episode with the time, the session, the size, Jev's answers, the start of the last request and what followed: compacted, cleared, compacted while away, auto-compacted at the limit, kept going, or session deleted. It marks the advice you pressed the band button for and ends with the `rm` decisions, your answers and how long each waited.
 
 ## The rm helper
 
@@ -114,7 +114,7 @@ It runs before every Bash and PowerShell tool call (`PreToolUse`, matcher `Bash|
 | A PowerShell path on a drive that is not a file system (`Env:`, `Alias:`, `Function:`, `Variable:`, `HKCU:`, `HKLM:`, `Cert:`, `WSMan:`, `Registry::`) | No decision |
 | `Remove-Item … -WhatIf` | No decision |
 | A network path (`\\server\share\…`) | `ask`, without looking the path up |
-| Any other existing file or folder | `ask`, with the reason `실제 파일 삭제: <paths>` ("deleting real files"), unless Jev lifts it (below) |
+| Any other existing file or folder | `ask`, with the reason `실제 파일 삭제: <paths>` ("deleting real files"), unless every target can be restored (see [When the ask is lifted](#when-the-ask-is-lifted)), or Jev lifts it |
 | A PowerShell command its parser cannot read (a syntax error, PowerShell not answering within 3 seconds, a nested PowerShell command left when the hook has spent 9 seconds reading, an answer it does not expect), or one that deletes and runs code it cannot follow (`& $name`, unless the name works out to a path ending in `.ps1`, `.bat` or `.cmd` and the command defines no function, alias or module, which runs like a script written out; `Invoke-Expression`, `Start-Process` or `Set-Alias` with an argument it cannot work out, `[scriptblock]::Create`, `.Invoke()`, a `Delete()` method in a command that gets file objects from `Get-ChildItem`, `New-Item`, `-PassThru` or a `Get-Item` it cannot tie to that `Delete()`), or makes a drive with `New-PSDrive` | `ask`, with the reason `삭제 명령을 분석하지 못함: <start of the command>` ("could not read the delete command"). Jev is not asked. |
 | A target it cannot work out | `deny`, with a hint to rewrite the command using literal paths |
 
@@ -147,9 +147,31 @@ What its decisions do depends on Claude Code's permission mode:
 | `bypassPermissions` | A prompt. Claude Code's documentation does not say this; it was seen in a test on 2026-10-03. | Blocked | Runs |
 | Other modes | A prompt (`dontAsk` refuses the call instead) | Blocked | Claude Code's normal permission handling |
 
-### When Jev can lift the ask
+### When the ask is lifted
 
-The facts are checked by code; Jev only judges what the target is for. Jev is asked only when every target of the command is one of these (at most five):
+First the hook checks whether every target can be restored. This is done by code, needs no key and sends nothing to Jev. It looks at up to 10 targets and stops when its time budget (8 seconds) is spent; the targets it did not reach keep the ask. `"recoverable": false` in the `rm` config switches it off.
+
+| Target | Lifted when |
+|---|---|
+| A file in a git repository | It is tracked and unchanged, or its exact content is in some commit (`git log --all --find-object`). A file marked assume-unchanged or skip-worktree gets the content check. |
+| A file with an identical copy | The command itself names the copy (`diff repo.md vault.md`, then the delete), or copies one file onto the deleted one (`cp`, `copy`, `Copy-Item`). The copy is compared by content (CRLF against LF alone does not count as a difference), up to 2 MB, and is not itself a target, not inside a target folder and not a hard link of a target. |
+| A folder in a repository | It is clean, its ignored files are only in the build folders above, and it holds no assume-unchanged or skip-worktree file and no nested repository or submodule. |
+| A linked worktree | Its folder is the worktree root and its `HEAD` is in another branch (merged). |
+| A folder outside git | It holds only merged linked worktrees or empty folders, one level deep and at most 10. |
+| A folder with its own `.git` folder | Never. It always asks. |
+
+A copy counts only when the whole command is plain: each statement is a delete, a read without options (`diff`, `fc`, `cmp`, `cat`, `type`, `Get-Content`, `Compare-Object`, `Get-FileHash`, `sha256sum`, `md5sum`, `certutil -hashfile <file> [ALG]`) or a copy of one file onto one of the deleted files. The command may use only plain characters (no redirects, variables, `$`, parentheses, braces, `#`, `@`, wildcards or curly quotes), command names written bare, and in Bash no unquoted backslash. Anything fancier asks. A copy made by the same command does not count, because the hook runs before the command does.
+
+When everything is lifted, the hook makes no decision and shows `[jev-advisor] 되살릴 수 있어 묻지 않고 지웁니다: out.json (git), a.md (사본 b.md)` (with `--lang en`, `Recoverable, so deleted without asking: …`). When recovery lifts some targets and Jev the rest, one such line shows `(Jev 0.93)` for the Jev ones. When a target is not lifted, the ask reason gets a note for it:
+
+| Note (`ko` / `en`) | Meaning |
+|---|---|
+| `git에 없음: <path>` / `not in git: <path>` | Git does not know the file |
+| `바뀜: <path>` / `changed: <path>` | The file or folder has changes git does not hold |
+| `병합 안 됨` / `not merged` | The worktree's branch is not merged |
+| `저장소` / `a repository` | The folder is or holds a repository (`: <path>` names it when it is inside the folder) |
+
+Then Jev sees only the targets recovery did not lift. The facts are checked by code; Jev only judges what the target is for. Jev is asked only when every one of those targets is one of these (at most five):
 
 | Target | Checked first | Jev is asked |
 |---|---|---|
@@ -182,7 +204,8 @@ A key saved by `install` or `key` stays in `~/.claude/claude-jev-advisor/jev-key
 | `~/.claude/claude-jev-advisor/config.json` | Switches and settings that differ from the defaults. A missing or broken file reads as the defaults. A value of the wrong type falls back to its default, so only `"enabled": false` turns a helper off. |
 | `~/.claude/claude-jev-advisor/state/<session>.json` | The last judgment of each open session, read by the display. Removed when the session ends. |
 | `~/.claude/claude-jev-advisor/advice/<session>.json` | The advice the band shows (`mod` display), for claude-alarm's dashboard. Removed when the session ends. |
-| `~/.claude/claude-jev-advisor/log/YYYY-MM.jsonl` | One line per context judgment and per `rm` Jev check: the size, or the tool (`Bash` or `PowerShell`) and the command, what was sent to Jev (parts of your conversation), the answers and the result. Never the key. |
+| `~/.claude/claude-jev-advisor/presses/<session>-<time>.json` | One file per band press, kept for the report. |
+| `~/.claude/claude-jev-advisor/log/YYYY-MM.jsonl` | One line per context judgment and per `rm` decision (including targets passed over and why): the size, or the tool (`Bash` or `PowerShell`) and the command, what was sent to Jev (parts of your conversation), the answers and the result. Never the key. |
 | `~/.claude/claude-jev-advisor/statusline-before.json` | Your own status line while `--display statusline` is in use |
 | `~/.claude/claude-jev-advisor/jev-key.env` | Your TypeSafe API key, when you typed it in `install` or `key` |
 | `~/.claude/backups/settings.json.*-before-claude-jev-advisor` | Copies of `settings.json` from before each change |
@@ -198,11 +221,11 @@ Defaults:
   "display": "mod",
   "shortcut": null,
   "context": { "enabled": true, "minTokens": 250000, "compactMinTokens": 250000, "redRemainingPct": 20, "unitDoneYes": 0.6, "phaseDoneYes": 0.6 },
-  "rm": { "enabled": true, "jev": true, "throwawayYes": 0.8, "maxDirFiles": 50 }
+  "rm": { "enabled": true, "jev": true, "recoverable": true, "throwawayYes": 0.8, "maxDirFiles": 50 }
 }
 ```
 
-`minTokens` is where judging starts, `compactMinTokens` where `/compact` is suggested, `redRemainingPct` where the red zone starts, and `unitDoneYes` / `phaseDoneYes` are the Jev probabilities needed for "work finished" (`/compact`) and "stage closed" (`/clear`). For `rm`, `jev` switches the Jev check, `throwawayYes` is the probability needed to lift an ask, and `maxDirFiles` the most files a folder of this session may hold. `shortcut` is set by `install`: the key it bound, or `null` when it bound none.
+`minTokens` is where judging starts, `compactMinTokens` where `/compact` is suggested, `redRemainingPct` where the red zone starts, and `unitDoneYes` / `phaseDoneYes` are the Jev probabilities needed for "work finished" (`/compact`) and "stage closed" (`/clear`). For `rm`, `jev` switches the Jev check, `recoverable` switches the check that lifts the ask for what git or a copy can restore, `throwawayYes` is the probability needed to lift an ask, and `maxDirFiles` the most files a folder of this session may hold. `shortcut` is set by `install`: the key it bound, or `null` when it bound none.
 
 `config.json` keeps only the values you changed, with `"version": 2`. A config written by 0.1.x, which saved every value, has its old default thresholds (`minTokens` 100000, `compactMinTokens` 200000, `unitDoneYes` 0.7) read as unset, so the new defaults apply.
 
