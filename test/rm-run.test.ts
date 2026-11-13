@@ -254,6 +254,21 @@ test('a vault file with an identical repository copy named in the command is del
   }
 });
 
+test('a Bash copy onto the deleted file through an unquoted backslash still asks, since Git Bash writes elsewhere', WINDOWS_ONLY, async () => {
+  const home = tempHome();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-rmesc-'));
+  fs.writeFileSync(path.join(dir, 'n.md'), 'note\n');
+  fs.writeFileSync(path.join(dir, '.n.md'), 'note\n');
+  fs.writeFileSync(path.join(dir, 'x.md'), 'x\n');
+  try {
+    const out = JSON.parse((await runRmHook(bash('rm n.md; cat .n.md; cp x.md .\\n.md', dir), recoverDeps(home)))!);
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'ask');
+    assert.equal(records(home)[0].targets[0].lift, null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('with recoverable switched off the ask is exactly as before', WINDOWS_ONLY, async () => {
   const home = tempHome();
   writeConfig(home, { ...DEFAULT_CONFIG, rm: { ...DEFAULT_CONFIG.rm, recoverable: false } });

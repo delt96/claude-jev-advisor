@@ -377,7 +377,7 @@ test('recoverTargets stops checking once out of time', () => {
     spent = args[2] === 'status';
     return { status: 0, stdout: args[2] === 'ls-files' ? 'H x\0' : '', stderr: '' };
   };
-  const results = recoverTargets(['C:\\d\\a.md', 'C:\\d\\b.md'], 'rm C:/d/a.md C:/d/b.md', 'C:\\work', 'C:\\Users\\me', () => spent, tracked);
+  const results = recoverTargets(['C:\\d\\a.md', 'C:\\d\\b.md'], 'rm C:/d/a.md C:/d/b.md', 'Bash', 'C:\\work', 'C:\\Users\\me', () => spent, tracked);
   assert.equal(results[0].lift, 'git');
   assert.deepEqual(results[1], { lift: null, note: null });
 });
@@ -392,7 +392,8 @@ function copyFixture() {
   fs.writeFileSync(path.join(root, 'x.md'), 'x\n');
   const nogit: GitRunner = () => ({ status: 128, stdout: '', stderr: 'fatal: not a git repository' });
   const s = (p: string) => p.replace(/\\/g, '/');
-  const lift = (command: string, cwd = root, targets = [path.join(dirs.vault, 'n.md')]) => recoverTargets(targets, command, cwd, 'C:\\Users\\me', () => false, nogit)[0].lift;
+  const lift = (command: string, cwd = root, targets = [path.join(dirs.vault, 'n.md')], tool: 'Bash' | 'PowerShell' = 'Bash') =>
+    recoverTargets(targets, command, tool, cwd, 'C:\\Users\\me', () => false, nogit)[0].lift;
   return { root, ...dirs, s, lift };
 }
 
@@ -545,6 +546,26 @@ test('a quote glued to a word, a tilde other than ~/ and a POSIX path outside /<
     assert.equal(lift(`rm ${V} && cp "${s(repo)}/n.md" ${V}`), 'copy');
     assert.equal(lift(`rm ${V}; cat /${s(other)[0].toLowerCase()}/${s(other).slice(3)}/n.md`), 'copy');
     assert.equal(lift(`rm ${V}; cat ${O} ~`), 'copy');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('under the Bash tool an unquoted backslash leaves no copy, while quoted backslash paths and PowerShell backslash paths still lift', WINDOWS_ONLY, () => {
+  const { root, repo, vault, s, lift } = copyFixture();
+  const here = path.join(root, 'n.md');
+  fs.writeFileSync(here, 'note\n');
+  fs.writeFileSync(path.join(root, '.n.md'), 'note\n');
+  const V = path.join(vault, 'n.md');
+  const R = path.join(repo, 'n.md');
+  try {
+    assert.equal(lift('rm n.md; cat .n.md; cp x.md .\\n.md', root, [here]), null);
+    assert.equal(lift(`rm n.md; cat .n.md; cp x.md ${here}`, root, [here]), null);
+    assert.equal(lift(`rm "${s(V)}" && cp ${R} "${s(V)}"`), null);
+    assert.equal(lift(`rm "${V}" && cp "${R}" "${V}"`), 'copy');
+    assert.equal(lift(`rm '${V}' && cp '${R}' '${V}'`), 'copy');
+    assert.equal(lift(`Remove-Item ${V}; Copy-Item ${R} ${V}`, root, [V], 'PowerShell'), 'copy');
+    assert.equal(lift('Remove-Item n.md; Get-Content .n.md; Copy-Item .\\.n.md .\\n.md', root, [here], 'PowerShell'), 'copy');
   } finally {
     cleanup(root);
   }

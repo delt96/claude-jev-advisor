@@ -34,6 +34,23 @@ const LEADING_TILDE = /(?<![^\s;&|])~(?![^\\/\s;&|])/g;
 // Git Bash maps every other absolute POSIX path to its own mounts (/tmp) or install folder (/usr, /etc).
 const MSYS_ONLY_PATH = /^\/(?![A-Za-z](?:\/|$))/;
 
+export type ShellTool = 'Bash' | 'PowerShell';
+
+// Bash drops an unquoted backslash as an escape (.\n.md is .n.md) while operands are read as Windows paths here.
+function hasUnquotedBackslash(command: string): boolean {
+  let quote: string | null = null;
+  for (const c of command) {
+    if (quote !== null) {
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === '\\') {
+      return true;
+    }
+  }
+  return false;
+}
+
 function splitStatements(command: string): string[] {
   const out: string[] = [];
   let current = '';
@@ -104,8 +121,9 @@ function fileId(p: string): string | null {
 // Files a command only reads or replaces with their own copy. The whole command has to be made of deletes, plain reads
 // and plain copies onto a deleted file, with no redirect, assignment, directory change or other tool: any other
 // statement can overwrite a candidate in ways that cannot be read from its words, so then there are no candidates.
-export function readOnlyPaths(command: string, cwd: string, home: string, targets: string[]): string[] {
+export function readOnlyPaths(command: string, tool: ShellTool, cwd: string, home: string, targets: string[]): string[] {
   if (!PLAIN_COMMAND.test(command) || ESCAPED_QUOTE_OR_LONE_CR.test(command) || command.replace(LEADING_TILDE, '').includes('~')) return [];
+  if (tool === 'Bash' && hasUnquotedBackslash(command)) return [];
   const deleted = new Set(targets.map((t) => win.normalize(t).replace(/\\+$/, '').toLowerCase()));
   const found: string[] = [];
   const written: string[] = [];
@@ -333,8 +351,8 @@ export function folderRecovery(dir: string, git: GitRunner = runGit): Recovery {
 export const MAX_RECOVER_TARGETS = 10;
 
 // The clock is also checked before every git call, so a target that starts just inside the budget runs at most one call past it.
-export function recoverTargets(paths: string[], command: string, cwd: string, home: string, outOfTime: () => boolean, git: GitRunner = runGit): Recovery[] {
-  const named = readOnlyPaths(command, cwd, home, paths);
+export function recoverTargets(paths: string[], command: string, tool: ShellTool, cwd: string, home: string, outOfTime: () => boolean, git: GitRunner = runGit): Recovery[] {
+  const named = readOnlyPaths(command, tool, cwd, home, paths);
   const limited: GitRunner = (args, env) => (outOfTime() ? { status: null, stdout: '', stderr: '' } : git(args, env));
   return paths.map((target) => {
     if (outOfTime()) return NOT_LIFTED;
