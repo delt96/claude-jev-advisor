@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runGit, type GitRunner } from '../src/rm/git.js';
-import { MAX_COPY_BYTES, fileRecovery, folderRecovery, recoverTargets, sameContent } from '../src/rm/recover.js';
+import { gitEnv, runGit, type GitRunner } from '../src/rm/git.js';
+import { MAX_COPY_BYTES, fileRecovery, folderRecovery, recoverTargets, sameContent, type ShellTool } from '../src/rm/recover.js';
+import type { Skipped } from '../src/rm/targets.js';
 
 const WINDOWS_ONLY = { skip: process.platform !== 'win32' && 'the rm helper runs on Windows only' };
 
@@ -295,6 +296,19 @@ test('a folder outside git that holds only merged worktrees is in git; a stray f
   }
 });
 
+test('a repository inside a folder outside git is named as a repository', WINDOWS_ONLY, () => {
+  const box = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-recover-'));
+  try {
+    const proj = path.join(box, 'proj');
+    fs.mkdirSync(proj);
+    git(proj, 'init', '-q', '-b', 'main');
+    commit(proj, 'a.txt', 'a');
+    assert.deepEqual(folderRecovery(box), { lift: null, note: { kind: 'repository', path: 'proj' } });
+  } finally {
+    cleanup(box);
+  }
+});
+
 test('a junction child of a container is not a folder to lift', WINDOWS_ONLY, () => {
   const box = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-recover-'));
   const target = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-recover-'));
@@ -377,7 +391,7 @@ test('recoverTargets stops checking once out of time', () => {
     spent = args[2] === 'status';
     return { status: 0, stdout: args[2] === 'ls-files' ? 'H x\0' : '', stderr: '' };
   };
-  const results = recoverTargets(['C:\\d\\a.md', 'C:\\d\\b.md'], 'rm C:/d/a.md C:/d/b.md', 'Bash', 'C:\\work', 'C:\\Users\\me', () => spent, tracked);
+  const results = recoverTargets(['C:\\d\\a.md', 'C:\\d\\b.md'], 'rm C:/d/a.md C:/d/b.md', 'Bash', 'C:\\work', 'C:\\Users\\me', [], () => spent, tracked);
   assert.equal(results[0].lift, 'git');
   assert.deepEqual(results[1], { lift: null, note: null });
 });
@@ -392,8 +406,8 @@ function copyFixture() {
   fs.writeFileSync(path.join(root, 'x.md'), 'x\n');
   const nogit: GitRunner = () => ({ status: 128, stdout: '', stderr: 'fatal: not a git repository' });
   const s = (p: string) => p.replace(/\\/g, '/');
-  const lift = (command: string, cwd = root, targets = [path.join(dirs.vault, 'n.md')], tool: 'Bash' | 'PowerShell' = 'Bash') =>
-    recoverTargets(targets, command, tool, cwd, 'C:\\Users\\me', () => false, nogit)[0].lift;
+  const lift = (command: string, cwd = root, targets = [path.join(dirs.vault, 'n.md')], tool: ShellTool = 'Bash', skipped: Skipped[] = []) =>
+    recoverTargets(targets, command, tool, cwd, 'C:\\Users\\me', skipped, () => false, nogit)[0].lift;
   return { root, ...dirs, s, lift };
 }
 
@@ -569,4 +583,36 @@ test('under the Bash tool an unquoted backslash leaves no copy, while quoted bac
   } finally {
     cleanup(root);
   }
+});
+
+test('a tool other than PowerShell gets the stricter Bash backslash rule', WINDOWS_ONLY, () => {
+  const { root, lift } = copyFixture();
+  try {
+    assert.equal(lift('rm vault\\n.md; cat repo\\n.md', root, undefined, 'PowerShell'), 'copy');
+    assert.equal(lift('rm vault\\n.md; cat repo\\n.md', root, undefined, 'Bash'), null);
+    assert.equal(lift('rm vault\\n.md; cat repo\\n.md', root, undefined, 'Other' as ShellTool), null);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('a command that also deletes a passed-over path counts no copy, while git still lifts', WINDOWS_ONLY, () => {
+  const { root, repo, vault, s, lift } = copyFixture();
+  const command = `diff "${s(repo)}/n.md" "${s(vault)}/n.md" && rm -rf "${s(repo)}" && rm "${s(vault)}/n.md"`;
+  try {
+    assert.equal(lift(command, root, undefined, 'Bash', [{ shown: s(repo), why: 'temp' }]), null);
+    const tracked: GitRunner = (args) => ({ status: 0, stdout: args[2] === 'ls-files' ? 'H n.md\0' : '', stderr: '' });
+    const viaGit = recoverTargets([path.join(vault, 'n.md')], command, 'Bash', root, 'C:\\Users\\me', [{ shown: s(repo), why: 'build' }], () => false, tracked);
+    assert.deepEqual(viaGit, [{ lift: 'git' }]);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('git never takes optional locks, so a status beside another git command does not hold index.lock', () => {
+  const env = gitEnv({ GIT_ICASE_PATHSPECS: '1' });
+  assert.equal(env.GIT_OPTIONAL_LOCKS, '0');
+  assert.equal(env.LC_ALL, 'C');
+  assert.equal(env.GIT_ICASE_PATHSPECS, '1');
+  for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR']) assert.equal(name in env, false);
 });

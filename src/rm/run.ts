@@ -146,7 +146,7 @@ export async function runRmHook(raw: string, deps: RmHookDeps): Promise<string |
     let recoveries: Recovery[] | null = null;
     if (config.rm.recoverable && targets.length <= MAX_RECOVER_TARGETS) {
       try {
-        recoveries = recoverTargets(targets.map((t) => t.path as string), command, tool, cwd, deps.home, () => elapsed() > RECOVER_BUDGET_MS, deps.git);
+        recoveries = recoverTargets(targets.map((t) => t.path as string), command, tool, cwd, deps.home, skipped, () => elapsed() > RECOVER_BUDGET_MS, deps.git);
       } catch {
         recoveries = null;
       }

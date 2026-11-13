@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ICASE, runGit, type GitRunner } from './git.js';
-import { BUILD_DIRS } from './targets.js';
+import { BUILD_DIRS, type Skipped } from './targets.js';
 
 export type RecoveryNote = { kind: 'untracked' | 'changed' | 'unmerged' | 'repository'; path?: string };
 export type Recovery = { lift: 'git' } | { lift: 'copy'; copy: string } | { lift: null; note: RecoveryNote | null };
@@ -123,7 +123,7 @@ function fileId(p: string): string | null {
 // statement can overwrite a candidate in ways that cannot be read from its words, so then there are no candidates.
 export function readOnlyPaths(command: string, tool: ShellTool, cwd: string, home: string, targets: string[]): string[] {
   if (!PLAIN_COMMAND.test(command) || ESCAPED_QUOTE_OR_LONE_CR.test(command) || command.replace(LEADING_TILDE, '').includes('~')) return [];
-  if (tool === 'Bash' && hasUnquotedBackslash(command)) return [];
+  if (tool !== 'PowerShell' && hasUnquotedBackslash(command)) return [];
   const deleted = new Set(targets.map((t) => win.normalize(t).replace(/\\+$/, '').toLowerCase()));
   const found: string[] = [];
   const written: string[] = [];
@@ -322,7 +322,8 @@ function containerRecovery(dir: string, git: GitRunner): Recovery {
       return NOT_LIFTED;
     }
     if (empty) continue;
-    const inner = isFile(win.join(full, '.git')) ? folderRecovery(full, git) : { lift: null, note: { kind: 'untracked', path: '' } } as Recovery;
+    const dotGit = win.join(full, '.git');
+    const inner = isFile(dotGit) || isDirectory(dotGit) ? folderRecovery(full, git) : { lift: null, note: { kind: 'untracked', path: '' } } as Recovery;
     if (inner.lift === 'git') continue;
     if (inner.lift === null && inner.note !== null) return { lift: null, note: { ...inner.note, path: `${child.name}${inner.note.path ? `/${inner.note.path}` : ''}` } };
     return NOT_LIFTED;
@@ -351,8 +352,10 @@ export function folderRecovery(dir: string, git: GitRunner = runGit): Recovery {
 export const MAX_RECOVER_TARGETS = 10;
 
 // The clock is also checked before every git call, so a target that starts just inside the budget runs at most one call past it.
-export function recoverTargets(paths: string[], command: string, tool: ShellTool, cwd: string, home: string, outOfTime: () => boolean, git: GitRunner = runGit): Recovery[] {
-  const named = readOnlyPaths(command, tool, cwd, home, paths);
+export function recoverTargets(paths: string[], command: string, tool: ShellTool, cwd: string, home: string, skipped: readonly Skipped[], outOfTime: () => boolean, git: GitRunner = runGit): Recovery[] {
+  // A passed-over path (temp, .superpowers, a build folder) is still deleted by the command but never reaches the copy
+  // check as a target, so a copy inside it would be counted although it goes too.
+  const named = skipped.length > 0 ? [] : readOnlyPaths(command, tool, cwd, home, paths);
   const limited: GitRunner = (args, env) => (outOfTime() ? { status: null, stdout: '', stderr: '' } : git(args, env));
   return paths.map((target) => {
     if (outOfTime()) return NOT_LIFTED;

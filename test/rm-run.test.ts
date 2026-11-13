@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { PS_PARSE_TIMEOUT_MS } from '../src/rm/powershell.js';
-import { GIT_TIMEOUT_MS, type GitRunner } from '../src/rm/git.js';
+import { GIT_TIMEOUT_MS, runGit, type GitRunner } from '../src/rm/git.js';
 import { READ_BUDGET_MS, RECOVER_BUDGET_MS, runRmHook, type RmHookDeps } from '../src/rm/run.js';
 import { DEFAULT_CONFIG, writeConfig } from '../src/config.js';
 import { logFile } from '../src/context/files.js';
@@ -14,8 +14,10 @@ const REPO = path.resolve(import.meta.dirname, '..');
 const tempHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cja-rm-'));
 const bash = (command: string, cwd = 'C:\\workspace\\proj') => JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd });
 
+const nogit: GitRunner = () => ({ status: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' });
+
 function deps(home: string): RmHookDeps {
-  return { home, env: { TEMP: 'C:\\Temp' }, tmpdir: 'C:\\Temp', cwd: 'C:\\workspace\\proj', probe: { exists: () => true, isIgnored: () => false } };
+  return { home, env: { TEMP: 'C:\\Temp' }, tmpdir: 'C:\\Temp', cwd: 'C:\\workspace\\proj', probe: { exists: () => true, isIgnored: () => false }, git: nogit };
 }
 
 test('a real file asks', async () => {
@@ -207,7 +209,7 @@ function repoWith(files: Record<string, string>): string {
   return repo;
 }
 const slashes = (p: string) => p.replace(/\\/g, '/');
-const recoverDeps = (home: string, extra: Partial<RmHookDeps> = {}): RmHookDeps => ({ ...deps(home), now: () => NOW, ...extra });
+const recoverDeps = (home: string, extra: Partial<RmHookDeps> = {}): RmHookDeps => ({ ...deps(home), git: runGit, now: () => NOW, ...extra });
 
 test('a tracked unchanged file is deleted without asking, with a line that says it is in git', WINDOWS_ONLY, async () => {
   const home = tempHome();
@@ -251,6 +253,26 @@ test('a vault file with an identical repository copy named in the command is del
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
     fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
+test('a copy that the same command deletes through a passed-over target never lifts the ask', WINDOWS_ONLY, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-rmskip-'));
+  const temp = path.join(root, 'T');
+  for (const d of ['T', 'dist', '.superpowers']) {
+    fs.mkdirSync(path.join(root, d));
+    fs.writeFileSync(path.join(root, d, 'n.md'), 'only my notes\r\n');
+  }
+  fs.writeFileSync(path.join(root, 'n.md'), 'only my notes\n');
+  const probe = { exists: (p: string) => fs.existsSync(p), isIgnored: (p: string) => /\\dist(\\|$)/i.test(p) };
+  const run = async (command: string) => JSON.parse((await runRmHook(bash(command, root), { ...recoverDeps(tempHome()), git: nogit, env: { TEMP: temp, TMP: temp }, tmpdir: temp, probe }))!);
+  try {
+    for (const command of ['cat T/n.md && rm T/n.md && rm n.md', 'cat dist/n.md && rm -rf dist && rm n.md', 'cat .superpowers/n.md && rm -rf .superpowers && rm n.md', 'cat n.md && rm n.md']) {
+      assert.equal((await run(command)).hookSpecificOutput?.permissionDecision, 'ask', command);
+    }
+    assert.match((await run('cat dist/n.md && rm n.md')).systemMessage, /n\.md \(사본 n\.md\)$/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

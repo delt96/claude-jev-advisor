@@ -67,6 +67,7 @@ const deps = (home: string, fetchFn: FetchFn, probe: FactProbe = facts()): RmHoo
   facts: probe,
   fetchFn,
   now: () => NOW,
+  git: () => ({ status: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' }),
 });
 
 const logLines = (home: string) => fs.readFileSync(path.join(dataDir(home), 'log', '2026-10.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
