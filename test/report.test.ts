@@ -54,8 +54,6 @@ function setupHome(): string {
     stopRecord('sess-auto', at, t('auto', [compacted(later(10), 'auto')])),
     stopRecord('sess-none', at, null, { advice: null, judgment: { phase: 'working', clear: false } }),
     { ...stopRecord('sess-legacy', at, path.join(home, 'gone.jsonl'), { judgment: { phase: 'unit_done', clear: true }, jev: { answers: { unit_done: 0.9, goal_done: 0.85 } } }), advice: undefined },
-    { at: later(14), helper: 'rm', event: 'pre_tool_use', sessionId: 'sess-rm-1', decision: 'pass', targets: [{ shown: 'C:\\p\\out.json', p: 0.93 }, { shown: 'C:\\p\\.angular', p: 0.97 }] },
-    { at: later(15), helper: 'rm', event: 'pre_tool_use', sessionId: 'sess-rm-1', decision: 'ask', targets: [{ shown: 'C:\\p\\notes.md', p: 0.3 }] },
   ]);
   return home;
 }
@@ -96,14 +94,6 @@ test('the report command takes --days and refuses bad values', async () => {
   assert.equal(await runCli(['report', '--since', '3'], io), 2);
   assert.equal(await runCli(['status', '--days', '3'], io), 2);
   assert.match(err.join('\n'), /--days takes a whole number of days from 1/);
-});
-
-test('the report ends with the rm deletions Jev let through', () => {
-  const lines = reportLines(setupHome(), NOW, 7);
-  const at = lines.indexOf('rm deletions Jev let through: 1 (asked anyway after a Jev check: 1)');
-  assert.ok(at > 0);
-  assert.match(lines[at + 1], /^ {2}\d{4}-\d{2}-\d{2} \d{2}:\d{2} {2}sess-rm- {2}C:\\p\\out\.json \(0\.93\), C:\\p\\\.angular \(0\.97\)$/);
-  assert.equal(lines.length, at + 2);
 });
 
 test('answers that are not numbers are left out of the line instead of breaking the report', () => {
@@ -194,7 +184,7 @@ test('--turns lists every turn and takes no value', async () => {
   const err: string[] = [];
   const io: CliIo = { home, distDir: 'C:/n/dist', platform: 'win32', now: () => NOW, out: (l) => out.push(l), err: (l) => err.push(l), env: {} };
   assert.equal(await runCli(['report', '--turns'], io), 0);
-  assert.equal(out.filter((l) => l.includes('sess-ccc')).length, 2);
+  assert.equal(out.filter((l) => /^ {2}\d{4}-.*sess-ccc/.test(l)).length, 2);
   assert.equal(await runCli(['report', '--turns', '3'], io), 2);
   assert.match(err.join('\n'), /unknown helper "3"/);
   assert.equal(await runCli(['report', '--days', '0'], io), 2);

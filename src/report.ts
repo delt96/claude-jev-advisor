@@ -5,6 +5,7 @@ import { isRequest, parseLines, requestText, type Entry } from './context/transc
 import { adviceKind, formatSize, parseState, type AdviceKind } from './display/line.js';
 import { readLogRecords, type LogRecord } from './log-records.js';
 import { pressDir } from './paths.js';
+import { rmReportLines } from './report-rm.js';
 
 export type Outcome =
   | { kind: 'compact' | 'clear' | 'auto_compact' | 'idle_compact'; at: number }
@@ -174,7 +175,7 @@ function episodesOf(rows: AdviceRow[], presses: Press[]): Episode[] {
   return episodes.sort((a, b) => a.rows[0].at.getTime() - b.rows[0].at.getTime());
 }
 
-function localTime(date: Date): string {
+export function localTime(date: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`;
 }
@@ -204,18 +205,6 @@ function answersText(answers: Record<string, number> | null): string {
 
 function shortRequest(row: AdviceRow): string {
   return row.request.replace(/\s+/g, ' ').trim().slice(0, 40);
-}
-
-export function rmLines(home: string, now: Date, days: number): string[] {
-  const records = readLogRecords(home, new Date(now.getTime() - days * DAY_MS), now).filter((r) => r.helper === 'rm');
-  const passed = records.filter((r) => r.decision === 'pass');
-  const lines = [`rm deletions Jev let through: ${passed.length} (asked anyway after a Jev check: ${records.length - passed.length})`];
-  for (const record of passed) {
-    const targets = Array.isArray(record.targets) ? record.targets.filter(isRecord) : [];
-    const listed = targets.map((t) => `${String(t.shown)} (${typeof t.p === 'number' ? t.p.toFixed(2) : '?'})`).join(', ');
-    lines.push(`  ${localTime(new Date(record.at as string))}  ${String(record.sessionId ?? '').slice(0, 8)}  ${listed}`);
-  }
-  return lines;
 }
 
 function turnLines(rows: AdviceRow[]): string[] {
@@ -258,8 +247,8 @@ function episodeLines(episodes: Episode[]): string[] {
 export function reportLines(home: string, now: Date, days: number, options: { turns?: boolean } = {}): string[] {
   const rows = adviceRows(home, now, days);
   const span = `${days} day${days === 1 ? '' : 's'}`;
-  if (options.turns) return [`Advice shown in the last ${span}: ${rows.length}`, ...turnLines(rows), ...rmLines(home, now, days)];
+  if (options.turns) return [`Advice shown in the last ${span}: ${rows.length}`, ...turnLines(rows), ...rmReportLines(home, now, days)];
   const episodes = episodesOf(rows, readPresses(home));
   const sessions = new Set(rows.map((r) => r.sessionId)).size;
-  return [`Advice in the last ${span}: ${rows.length} times in ${episodes.length} episodes, ${sessions} sessions`, ...episodeLines(episodes), ...rmLines(home, now, days)];
+  return [`Advice in the last ${span}: ${rows.length} times in ${episodes.length} episodes, ${sessions} sessions`, ...episodeLines(episodes), ...rmReportLines(home, now, days)];
 }
