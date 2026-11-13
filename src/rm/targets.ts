@@ -3,14 +3,16 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const win = path.win32;
-const BUILD_DIRS = new Set(['target', 'build', 'dist', 'out', 'node_modules', 'coverage', '__pycache__', '.pytest_cache', '.gradle', '.next', '.nuxt', '.turbo', '.cache', 'bin', 'obj']);
+export const BUILD_DIRS: ReadonlySet<string> = new Set(['target', 'build', 'dist', 'out', 'node_modules', 'coverage', '__pycache__', '.pytest_cache', '.gradle', '.next', '.nuxt', '.turbo', '.cache', 'bin', 'obj']);
 const MAX_LISTED = 3;
 
 export type Probe = { exists(p: string): boolean; isIgnored(p: string): boolean };
 export type RmTarget = { shown: string; path: string | null };
 export type RmDecision = { decision: 'ask' | 'deny'; reason: string; targets?: RmTarget[] };
 export type Shell = 'bash' | 'powershell' | 'cmd';
-export type ReadCtx = { cwd: string | null; home: string; tmpdirs: string[]; env: Record<string, string | undefined>; probe: Probe };
+export type SkipReason = 'temp' | 'superpowers' | 'missing' | 'build' | 'drive' | 'whatif';
+export type Skipped = { shown: string; why: SkipReason };
+export type ReadCtx = { cwd: string | null; home: string; tmpdirs: string[]; env: Record<string, string | undefined>; probe: Probe; skipped?: Skipped[] };
 export type ShellCall = { name: string; args: (string | null)[]; cwd: string | null; raw: string; piped?: boolean };
 export type ReadResult = { deny: string | null; targets: RmTarget[]; failed: string[]; shells: ShellCall[] };
 export type Resolved = { path: string } | { unc: string } | { unresolvable: string };
@@ -30,13 +32,17 @@ function segments(p: string): string[] {
   return p.toLowerCase().split('\\');
 }
 
-export function judgePath(p: string, pattern: string | null, ctx: Pick<ReadCtx, 'tmpdirs' | 'probe'>): RmTarget | null {
+export function judgePath(p: string, pattern: string | null, ctx: Pick<ReadCtx, 'tmpdirs' | 'probe' | 'skipped'>): RmTarget | null {
   const shown = pattern === null ? p : `${p.replace(/\\$/, '')}\\${pattern}`;
+  const skip = (why: SkipReason): null => {
+    ctx.skipped?.push({ shown, why });
+    return null;
+  };
   const narrowPattern = pattern !== null && !/^[*?.]+$/.test(pattern);
-  if (ctx.tmpdirs.some((t) => isInside(p, t) || (narrowPattern && p.toLowerCase() === t.toLowerCase().replace(/\\+$/, '')))) return null;
-  if (segments(p).includes('.superpowers')) return null;
-  if (pattern === null && !ctx.probe.exists(p)) return null;
-  if (segments(p).some((s) => BUILD_DIRS.has(s)) && ctx.probe.isIgnored(p)) return null;
+  if (ctx.tmpdirs.some((t) => isInside(p, t) || (narrowPattern && p.toLowerCase() === t.toLowerCase().replace(/\\+$/, '')))) return skip('temp');
+  if (segments(p).includes('.superpowers')) return skip('superpowers');
+  if (pattern === null && !ctx.probe.exists(p)) return skip('missing');
+  if (segments(p).some((s) => BUILD_DIRS.has(s)) && ctx.probe.isIgnored(p)) return skip('build');
   return { shown, path: pattern === null ? p : null };
 }
 

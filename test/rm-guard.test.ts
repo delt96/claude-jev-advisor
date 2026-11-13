@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decide, hookOutput } from '../src/rm/guard.js';
+import { decide, hookOutput, readBash } from '../src/rm/guard.js';
+import type { Skipped } from '../src/rm/targets.js';
 
 const PROJECT = 'C:\\workspace\\proj';
 const TMP = 'C:\\Users\\me\\AppData\\Local\\Temp';
@@ -287,4 +288,17 @@ test('a wildcard right under a drive root is shown with one separator', () => {
 test('a wildcard right under a root is read in that root, not in the current folder', () => {
   assert.equal(reason('rm -f C:/*.log', { cwd: TMP }), '실제 파일 삭제: C:\\*.log');
   assert.deepEqual(run('rm -f /*.log', { cwd: TMP }).result?.targets, [{ shown: '/*.log', path: null }]);
+});
+
+test('targets passed over without a decision are collected with the reason', () => {
+  const skipped: Skipped[] = [];
+  const probe = { exists: (p: string) => !p.endsWith('missing.txt'), isIgnored: (p: string) => p.includes('\\dist\\') };
+  const read = readBash('rm -f C:/Users/me/AppData/Local/Temp/x.txt .superpowers/a missing.txt dist/b.js', { cwd: PROJECT, home: 'C:\\Users\\me', tmpdirs: [TMP], env: {}, probe, skipped });
+  assert.deepEqual(read.targets, []);
+  assert.deepEqual(skipped, [
+    { shown: 'C:\\Users\\me\\AppData\\Local\\Temp\\x.txt', why: 'temp' },
+    { shown: 'C:\\workspace\\proj\\.superpowers\\a', why: 'superpowers' },
+    { shown: 'C:\\workspace\\proj\\missing.txt', why: 'missing' },
+    { shown: 'C:\\workspace\\proj\\dist\\b.js', why: 'build' },
+  ]);
 });

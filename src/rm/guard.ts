@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { DELETE_WORDS, decisionOf, denyReason, emptyRead, judgePath, splitWindowsPattern, type Probe, type ReadCtx, type ReadResult, type RmDecision, type RmTarget } from './targets.js';
+import { DELETE_WORDS, decisionOf, denyReason, emptyRead, judgePath, splitWindowsPattern, type Probe, type ReadCtx, type ReadResult, type RmDecision, type RmTarget, type Skipped } from './targets.js';
 
 export { hookOutput, realProbe, type Probe, type RmDecision, type RmTarget } from './targets.js';
 
@@ -40,7 +40,7 @@ export type DecideInput = {
   env?: Record<string, string | undefined>;
   probe: Probe;
 };
-type Ctx = { cwd: string | null; home: string; tmpdirs: string[]; probe: Probe; vars: Vars; ifs: boolean };
+type Ctx = { cwd: string | null; home: string; tmpdirs: string[]; probe: Probe; skipped?: Skipped[]; vars: Vars; ifs: boolean };
 
 export function stripHeredocs(text: string): string {
   const out: string[] = [];
@@ -317,12 +317,12 @@ function setsBuiltName(commands: Command[]): boolean {
   return false;
 }
 
-export function readBash(command: string, { cwd, home, tmpdirs, env, probe }: ReadCtx): ReadResult {
+export function readBash(command: string, { cwd, home, tmpdirs, env, probe, skipped }: ReadCtx): ReadResult {
   const out = emptyRead();
   if (!/\b(?:rm|rmdir|xargs)\b/.test(command) && !SHELL_WORDS.test(command)) return out;
   const commands = splitCommands(tokenize(stripHeredocs(command)));
   const vars: Vars = new Map(KNOWN_ENV.filter((n) => env[n]).map((n): [string, string] => [n, env[n] as string]));
-  const ctx: Ctx = { cwd, home, tmpdirs, probe, vars, ifs: /\bIFS\b/.test(command.replace(/['"\\]/g, '')) || setsBuiltName(commands) };
+  const ctx: Ctx = { cwd, home, tmpdirs, probe, skipped, vars, ifs: /\bIFS\b/.test(command.replace(/['"\\]/g, '')) || setsBuiltName(commands) };
   const setCwd = (next: string | null) => { ctx.cwd = next; vars.set('PWD', next); };
   const deny = (why: string): ReadResult => ({ ...out, deny: denyReason('bash', why) });
   setCwd(cwd);

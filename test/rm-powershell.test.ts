@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import type { Skipped } from '../src/rm/targets.js';
 import { POWERSHELL_WORDS, readPowerShell, realPowerShell, type PowerShellRunner } from '../src/rm/powershell.js';
 
 const PROJECT = 'C:\\workspace\\proj';
@@ -348,4 +349,12 @@ test('the real runner gives up after its time limit', { skip }, async () => {
   const started = Date.now();
   assert.equal(await realPowerShell(process.env, 1)('Remove-Item x'), null);
   assert.ok(Date.now() - started < 2000);
+});
+
+test('other drives and -WhatIf are collected as passed over', { skip }, async () => {
+  const skipped: Skipped[] = [];
+  const env = { TEMP: TMP, TMP, USERPROFILE: 'C:\\Users\\me', LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' };
+  const result = await readPowerShell('Remove-Item Env:FOO; Remove-Item C:\\data\\a.txt -WhatIf', { cwd: PROJECT, home: 'C:\\Users\\me', tmpdirs: [TMP], env, probe: { exists: () => true, isIgnored: () => false }, skipped }, real);
+  assert.deepEqual(skipped.map((s) => s.why), ['drive', 'whatif']);
+  assert.deepEqual(result.targets, []);
 });
