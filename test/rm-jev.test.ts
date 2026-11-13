@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DEFAULT_CONFIG, writeConfig, type Config } from '../src/config.js';
 import type { FetchFn } from '../src/jev.js';
+import type { GitRunner } from '../src/rm/git.js';
 import { dataDir } from '../src/paths.js';
 import type { FactProbe } from '../src/rm/facts.js';
 import { RM_QUESTIONS, askNote, lifts, passMessage, rmJevRequest } from '../src/rm/judge.js';
@@ -66,6 +67,7 @@ const deps = (home: string, fetchFn: FetchFn, probe: FactProbe = facts()): RmHoo
   facts: probe,
   fetchFn,
   now: () => NOW,
+  git: () => ({ status: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' }),
 });
 
 const logLines = (home: string) => fs.readFileSync(path.join(dataDir(home), 'log', '2026-10.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
@@ -88,7 +90,10 @@ test('a test file this session made passes when Jev is sure, with a line for the
   assert.equal(log.helper, 'rm');
   assert.equal(log.decision, 'pass');
   assert.equal(log.transcriptPath, transcript);
-  assert.deepEqual(log.targets, [{ path: 'C:\\workspace\\proj\\out.json', shown: 'C:\\workspace\\proj\\out.json', kind: 'session', p: 0.93 }]);
+  assert.deepEqual(log.targets, [{ shown: 'C:\\workspace\\proj\\out.json', path: 'C:\\workspace\\proj\\out.json', lift: 'jev', kind: 'session', p: 0.93 }]);
+  assert.deepEqual(log.skipped, []);
+  assert.equal(log.reason, undefined);
+  assert.equal(log.jev.length, 1);
   assert.equal(JSON.stringify(log).includes('ts-test-key'), false);
 });
 
@@ -120,6 +125,8 @@ test('when Jev is not sure, or fails, the ask stays and says what Jev thought', 
   const down = JSON.parse((await runRmHook(input(transcript, 'rm -f out.json'), deps(home, failing))) ?? '');
   assert.match(down.hookSpecificOutput.permissionDecisionReason, / · Jev: 판단 못 함$/);
   assert.deepEqual(logLines(home).map((l) => l.decision), ['ask', 'ask']);
+  assert.deepEqual(logLines(home).map((l) => l.targets[0].p), [0.42, null]);
+  assert.deepEqual(logLines(home).map((l) => l.targets[0].lift), [null, null]);
 });
 
 test('Jev is not asked about tracked files, files made before the session, files no call of this session names, or several targets with one of those', async () => {
@@ -137,7 +144,9 @@ test('Jev is not asked about tracked files, files made before the session, files
     assert.doesNotMatch(out.hookSpecificOutput.permissionDecisionReason, /Jev/, command);
   }
   assert.equal(bodies.length, 0);
-  assert.equal(fs.existsSync(path.join(dataDir(home), 'log')), false);
+  const lines = logLines(home);
+  assert.equal(lines.length, cases.length);
+  assert.equal(lines.every((l) => l.decision === 'ask' && l.jev === undefined && l.targets.every((t: { lift: unknown }) => t.lift === null)), true);
 });
 
 test('without a key, a transcript, or with rm Jev switched off, the guard decides alone', async () => {
@@ -257,4 +266,22 @@ test('a key cut in half by an excerpt never leaves its start in the request or t
   assert.equal(bodies.length, 1);
   assert.equal(bodies[0].includes('ts-test'), false);
   assert.equal(fs.readFileSync(path.join(dataDir(home), 'log', '2026-10.jsonl'), 'utf8').includes('ts-test'), false);
+});
+
+test('a recovered target and a session test file: Jev is asked only about the test file and the line names both', async () => {
+  const { home, transcript } = setup();
+  const bodies: string[] = [];
+  const fakeGit: GitRunner = (args) => {
+    const sub = args[2];
+    const spec = args[args.length - 1];
+    if (sub === 'ls-files') return { status: 0, stdout: spec.endsWith('kept.md') ? 'H kept.md\0' : '', stderr: '' };
+    if (sub === 'hash-object') return { status: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const out = await runRmHook(input(transcript, 'rm -f scratch/a.json src/kept.md'), { ...deps(home, jev([0.93], bodies)), git: fakeGit });
+  assert.equal(bodies.length, 1);
+  assert.match(JSON.parse(bodies[0]).state.target.path, /a\.json$/);
+  assert.deepEqual(JSON.parse(out ?? ''), { systemMessage: '[jev-advisor] 되살릴 수 있어 묻지 않고 지웁니다: kept.md (git), a.json (Jev 0.93)' });
+  const [log] = logLines(home);
+  assert.deepEqual(log.targets.map((t: { lift: string }) => t.lift), ['jev', 'git']);
 });

@@ -111,7 +111,7 @@ export function statusLines(home: string, env: Record<string, string | undefined
     }
     if (feature === 'context') lines.push(...contextLines(home, settings, config, env));
     if (feature === 'rm') {
-      lines.push(rmJevLine(config, env));
+      lines.push(rmJevLine(config, env), `  recoverable: ${config.rm.recoverable ? 'on' : 'off'}`);
       if (!commands.some((c) => coversPowerShell(c.matcher))) {
         lines.push('  Bash only: run "claude-jev-advisor install rm" to cover PowerShell');
       }

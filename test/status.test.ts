@@ -6,6 +6,7 @@ import path from 'node:path';
 import { statusLines } from '../src/status.js';
 import { install, setEnabled } from '../src/install.js';
 import { settingsPath } from '../src/paths.js';
+import { updateConfig } from '../src/config.js';
 
 const tempHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cja-status-'));
 const NOW = new Date(2026, 9, 2, 9, 5, 7);
@@ -26,6 +27,10 @@ test('installed with the hook file present, and switched off', () => {
   assert.equal(statusLines(home).some((l) => l.includes('broken')), false);
   assert.ok(statusLines(home, {}).includes('  jev: on, lifts the ask from 0.8 (no key - every real file asks)'));
   assert.ok(statusLines(home, { TYPESAFE_API_KEY: 'ts-x' }).includes('  jev: on, lifts the ask from 0.8'));
+  const lines = statusLines(home, {});
+  assert.equal(lines[lines.indexOf('  jev: on, lifts the ask from 0.8 (no key - every real file asks)') + 1], '  recoverable: on');
+  updateConfig(home, (c) => ({ ...c, rm: { ...c.rm, recoverable: false } }));
+  assert.ok(statusLines(home, {}).includes('  recoverable: off'));
   setEnabled(home, ['rm'], false);
   assert.ok(statusLines(home).includes('rm: installed, off'));
 });

@@ -48,6 +48,7 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
   const toasts: string[] = [];
   const calls = { compact: 0, run: [] as unknown[] };
   const writes: { file: string; value: unknown }[] = [];
+  const compactsAtWrite: number[] = [];
 
   const $ = {
     session: {
@@ -78,6 +79,7 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
       },
       write: async (file: string, text: string) => {
         if (fail.write) throw new Error('write failed');
+        compactsAtWrite.push(calls.compact);
         writes.push({ file, value: JSON.parse(text) });
       },
     },
@@ -113,6 +115,7 @@ function harness(opts: { dataDir?: string; files: Record<string, unknown>; token
     toasts,
     calls,
     writes,
+    compactsAtWrite,
     fail,
     tick,
     hooks,
@@ -426,7 +429,7 @@ test('advice that goes away, by a press or a new request, is written as none', a
   await pressed.start();
   await pressed.press(await pressed.band());
   await pressed.tick();
-  assert.deepEqual(pressed.writes.map((w) => w.value), [{ kind: 'compact', at: 1000 }, { kind: null, at: 1000 }]);
+  assert.deepEqual(pressed.writes.filter((w) => w.file === ADVICE_FILE).map((w) => w.value), [{ kind: 'compact', at: 1000 }, { kind: null, at: 1000 }]);
 
   const asked = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: COMPACT_STATE }, tokens: 312000, threshold: 967000 });
   await asked.start();
@@ -470,4 +473,27 @@ test('a headless session writes no advice', async () => {
   await h.start({ isInteractive: false });
   await h.tick();
   assert.deepEqual(h.writes, []);
+});
+
+test('pressing the band writes a press record before it runs the action', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: COMPACT_STATE }, tokens: 312000, threshold: 967000 });
+  await h.start();
+  h.setNow(1234);
+  const before = h.writes.length;
+  await h.press(await h.band());
+  const record = h.writes.slice(before).findIndex((w) => w.file === 'D:/data/presses/sess-1-1234.json');
+  assert.notEqual(record, -1);
+  assert.deepEqual(h.writes[before + record].value, { sessionId: 'sess-1', kind: 'compact', at: 1234 });
+  assert.equal(h.compactsAtWrite[before + record], 0);
+  assert.equal(h.calls.compact, 1);
+});
+
+test('a press record that cannot be written still runs the action', async () => {
+  const h = harness({ files: { [CONFIG_FILE]: DEFAULT_CONFIG, [STATE_FILE]: COMPACT_STATE }, tokens: 312000, threshold: 967000 });
+  await h.start();
+  const tree = await h.band();
+  h.fail.write = true;
+  await h.press(tree);
+  assert.equal(h.calls.compact, 1);
+  assert.deepEqual(h.toasts, []);
 });

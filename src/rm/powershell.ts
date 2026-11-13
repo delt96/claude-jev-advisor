@@ -440,9 +440,16 @@ function fileSystemPath(value: string): string | null {
 
 function classify(value: string, literal: boolean, cwd: string | null, ctx: ReadCtx): { real?: RmTarget; unresolvable?: string } {
   const text = fileSystemPath(value);
-  if (text === null) return {};
+  if (text === null) {
+    ctx.skipped?.push({ shown: value, why: 'drive' });
+    return {};
+  }
   const drive = /^([A-Za-z][A-Za-z0-9_]+):/.exec(text);
-  if (drive) return OTHER_DRIVES.has(drive[1].toLowerCase()) ? {} : { unresolvable: `a path on a PowerShell drive that cannot be worked out (${value})` };
+  if (drive && OTHER_DRIVES.has(drive[1].toLowerCase())) {
+    ctx.skipped?.push({ shown: value, why: 'drive' });
+    return {};
+  }
+  if (drive) return { unresolvable: `a path on a PowerShell drive that cannot be worked out (${value})` };
   let base = text;
   let pattern: string | null = null;
   if (!literal && /[*?[]/.test(text)) {
@@ -542,7 +549,12 @@ export async function readPowerShell(source: string, ctx: ReadCtx, run: PowerShe
         ranScript = true;
         cwd = null;
       } else {
-        if (item.whatIf) continue;
+        if (item.whatIf) {
+          const first = list(item.literalPath ?? item.path)[0] as Value | undefined;
+          const shown = first === undefined ? null : textOf(first, cwd);
+          ctx.skipped?.push({ shown: shown ?? '-WhatIf', why: 'whatif' });
+          continue;
+        }
         if (scripts && !item.ordered) {
           if (!out.failed.length) out.failed.push(excerpt);
           continue;

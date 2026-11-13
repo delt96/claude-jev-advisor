@@ -8,6 +8,7 @@ export const keybindingsPath = (home: string) => path.join(claudeDir(home), 'key
 export const backupsDir = (home: string) => path.join(claudeDir(home), 'backups');
 export const stateDir = (home: string) => path.join(dataDir(home), 'state');
 export const adviceDir = (home: string) => path.join(dataDir(home), 'advice');
+export const pressDir = (home: string) => path.join(dataDir(home), 'presses');
 export const logDir = (home: string) => path.join(dataDir(home), 'log');
 export const statusLineBeforePath = (home: string) => path.join(dataDir(home), 'statusline-before.json');
 export const savedKeyPath = (home: string) => path.join(dataDir(home), 'jev-key.env');

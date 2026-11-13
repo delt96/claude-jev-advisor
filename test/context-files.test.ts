@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { appendLog, logFile, readState, removeState, statePath, writeState } from '../src/context/files.js';
-import { logDir, stateDir, statusLineBeforePath } from '../src/paths.js';
+import { appendLog, logFile, prepareAdviceDir, readState, removeState, statePath, writeState } from '../src/context/files.js';
+import { adviceDir, logDir, pressDir, stateDir, statusLineBeforePath } from '../src/paths.js';
 
 const tempHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cja-files-'));
 
@@ -71,4 +71,11 @@ test('appendLog replaces each secret, also in its JSON-escaped form, and ignores
   assert.equal(line.includes('ts-abc'), false);
   assert.equal(line.includes('ts-\\"q\\"'), false);
   assert.equal(JSON.parse(line).note, 'key [redacted] and [redacted]');
+});
+
+test('preparing the advice folder also makes the press folder', () => {
+  const home = tempHome();
+  prepareAdviceDir(home);
+  assert.ok(fs.existsSync(adviceDir(home)));
+  assert.ok(fs.existsSync(pressDir(home)));
 });

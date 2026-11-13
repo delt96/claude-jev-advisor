@@ -31,7 +31,7 @@ test('the defaults match the spec', () => {
     display: 'mod',
     shortcut: null,
     context: { enabled: true, minTokens: 250000, compactMinTokens: 250000, redRemainingPct: 20, unitDoneYes: 0.6, phaseDoneYes: 0.6 },
-    rm: { enabled: true, jev: true, throwawayYes: 0.8, maxDirFiles: 50 },
+    rm: { enabled: true, jev: true, throwawayYes: 0.8, maxDirFiles: 50, recoverable: true },
   });
 });
 
@@ -84,7 +84,7 @@ test('a config saved by 0.1.x drops its default thresholds so the new defaults a
     keyFile: 'C:/k.env',
     display: 'mod',
     context: { enabled: true, minTokens: 250000, compactMinTokens: 200000, redRemainingPct: 20, unitDoneYes: 0.7, goalDoneYes: 0.8 },
-    rm: { enabled: true, jev: true, throwawayYes: 0.8, maxDirFiles: 50 },
+    rm: { enabled: true, jev: true, throwawayYes: 0.8, maxDirFiles: 50, recoverable: true },
   }));
   const config = readConfig(home);
   assert.deepEqual(config.context, { ...DEFAULT_CONFIG.context, minTokens: 250000 });
@@ -105,4 +105,13 @@ test('the shortcut install recorded is read back, an empty or wrong value reads 
   assert.equal(normalizeConfig({}).shortcut, null);
   assert.equal('shortcut' in configToSave(DEFAULT_CONFIG), false);
   assert.equal(configToSave({ ...DEFAULT_CONFIG, shortcut: 'ctrl+x ctrl+f' }).shortcut, 'ctrl+x ctrl+f');
+});
+
+test('rm.recoverable defaults to true, survives a false round trip and ignores a non-boolean', () => {
+  const home = tempHome();
+  assert.equal(readConfig(home).rm.recoverable, true);
+  writeConfig(home, { ...DEFAULT_CONFIG, rm: { ...DEFAULT_CONFIG.rm, recoverable: false } });
+  assert.equal(readConfig(home).rm.recoverable, false);
+  writeRaw(home, JSON.stringify({ rm: { recoverable: 'no' } }));
+  assert.equal(readConfig(home).rm.recoverable, true);
 });

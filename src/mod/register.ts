@@ -68,7 +68,14 @@ function reason(err: unknown): string {
   return message.replace(/^[^:]+: \$\.[\w]+(?:\.[\w]+)*: /, '');
 }
 
-async function press($: Engine, kind: AdviceKind): Promise<void> {
+async function press($: Engine, dataDir: string, kind: AdviceKind): Promise<void> {
+  try {
+    const id = await sessionId($);
+    if (id) {
+      const at = await $.clock.now();
+      await $.fs.write(`${dataDir}/presses/${id}-${at}.json`, JSON.stringify({ sessionId: id, kind, at }));
+    }
+  } catch {}
   try {
     $.ui.invalidate('ui.render');
     if (kind === 'compact') {
@@ -185,7 +192,7 @@ export function register(on: On, options: Readonly<Record<string, unknown>>): vo
         if (advice && at !== undefined && size !== null) band = drawBand($.ui.resolve(e), { advice, config: current, size, increase: increaseTo(size), onPress: () => {
           if (at <= handledAt) return;
           handledAt = at;
-          void press($, advice.kind);
+          void press($, dataDir, advice.kind);
         } });
       }
     } catch {

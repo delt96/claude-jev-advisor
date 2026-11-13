@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decideTool, nestedScript } from '../src/rm/dispatch.js';
 import { realPowerShell, type PowerShellRunner } from '../src/rm/powershell.js';
-import type { ShellCall } from '../src/rm/targets.js';
+import type { ShellCall, Skipped } from '../src/rm/targets.js';
 
 const PROJECT = 'C:\\workspace\\proj';
 const TMP = 'C:\\Users\\me\\AppData\\Local\\Temp';
@@ -149,4 +149,13 @@ test('targets from every level are asked together, a refusal anywhere wins, and 
   assert.equal(unread?.decision, 'ask');
   assert.equal(unread?.reason, '실제 파일 삭제: C:\\workspace\\proj\\a.txt · 삭제 명령을 분석하지 못함: Remove-Item b.txt');
   assert.deepEqual(unread?.targets?.map((t) => t.path), ['C:\\workspace\\proj\\a.txt', null]);
+});
+
+test('a nested shell adds its passed-over targets to the same list', async () => {
+  const skipped: Skipped[] = [];
+  const env = { TEMP: TMP, TMP, USERPROFILE: 'C:\\Users\\me' };
+  const result = await decideTool('Bash', 'bash -c "rm -f C:/Users/me/AppData/Local/Temp/x"', { cwd: PROJECT, home: 'C:\\Users\\me', tmpdirs: [TMP], env, probe: { exists: () => true, isIgnored: () => false }, skipped }, never);
+  assert.equal(result, null);
+  assert.equal(skipped.length, 1);
+  assert.equal(skipped[0].why, 'temp');
 });

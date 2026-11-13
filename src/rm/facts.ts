@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { parseLines, type Entry } from '../context/transcript.js';
 import { stripHeredocs } from './guard.js';
+import { ICASE, runGit } from './git.js';
 
 export const SESSION_LOG_MAX_BYTES = 32 * 1024 * 1024;
 export const CALLS_PER_TARGET = 3;
@@ -32,7 +32,6 @@ export type Candidate = 'session' | 'ignored';
 
 const win = path.win32;
 const DELETING = /\b(?:rm|rmdir|del|erase|rd|ri|Remove-Item|xargs)\b/i;
-const GIT_LOCATION_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'];
 const MOVES = ['cd', 'pushd', 'popd', 'chdir', 'set-location', 'sl', 'push-location', 'pop-location'];
 const CHANGES_FOLDER = new RegExp(`(^|[\\s;&|(])(?:${MOVES.join('|')})(?=[\\s;&|)]|$)`, 'i');
 const MOVING_TOOLS = new Set(['EnterWorktree', 'ExitWorktree']);
@@ -250,12 +249,6 @@ export function candidateKind(facts: TargetFacts, startedAt: number): Candidate 
 
 const bornAt = (stat: fs.Stats) => (stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.mtimeMs);
 
-function git(args: string[], extraEnv: Record<string, string> = {}) {
-  const env: Record<string, string | undefined> = { ...process.env, LC_ALL: 'C', ...extraEnv };
-  for (const name of GIT_LOCATION_ENV) delete env[name];
-  return spawnSync('git', args, { encoding: 'utf8', timeout: 3000, windowsHide: true, env });
-}
-
 export const realFactProbe: FactProbe = {
   info(p) {
     try {
@@ -301,13 +294,13 @@ export const realFactProbe: FactProbe = {
     // A repository of its own inside the target is never a throwaway, and git asked from the parent cannot see it.
     if (fs.existsSync(path.join(p, '.git'))) return true;
     // Windows paths are case-insensitive but git pathspecs are not; check-ignore refuses this setting, ls-files needs it.
-    const r = git(['-C', win.dirname(p), 'ls-files', '--', p], { GIT_ICASE_PATHSPECS: '1' });
+    const r = runGit(['-C', win.dirname(p), 'ls-files', '--', p], ICASE);
     if (r.status === 0) return r.stdout.trim() !== '';
     // Only "not a git repository" is a clear no; git missing, a timeout or any other failure leaves it unknown, and unknown counts as tracked.
-    return !(r.status === 128 && /not a git repository/i.test(r.stderr ?? ''));
+    return !(r.status === 128 && /not a git repository/i.test(r.stderr));
   },
   ignored(p) {
     if (fs.existsSync(path.join(p, '.git'))) return false;
-    return git(['-C', win.dirname(p), 'check-ignore', '-q', '--', p]).status === 0;
+    return runGit(['-C', win.dirname(p), 'check-ignore', '-q', '--', p]).status === 0;
   },
 };

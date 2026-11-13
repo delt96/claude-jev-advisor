@@ -8,7 +8,7 @@ export type ContextConfig = {
   unitDoneYes: number;
   phaseDoneYes: number;
 };
-export type RmConfig = { enabled: boolean; jev: boolean; throwawayYes: number; maxDirFiles: number };
+export type RmConfig = { enabled: boolean; jev: boolean; throwawayYes: number; maxDirFiles: number; recoverable: boolean };
 export type Config = { lang: Lang; keyFile: string | null; display: Display; shortcut: string | null; context: ContextConfig; rm: RmConfig };
 
 export const CONFIG_VERSION = 2;
@@ -19,7 +19,7 @@ export const DEFAULT_CONFIG: Config = {
   display: 'mod',
   shortcut: null,
   context: { enabled: true, minTokens: 250000, compactMinTokens: 250000, redRemainingPct: 20, unitDoneYes: 0.6, phaseDoneYes: 0.6 },
-  rm: { enabled: true, jev: true, throwawayYes: 0.8, maxDirFiles: 50 },
+  rm: { enabled: true, jev: true, throwawayYes: 0.8, maxDirFiles: 50, recoverable: true },
 };
 
 // Version 0.1.x saved every value, defaults included, and no version. Its default thresholds are read as unset so

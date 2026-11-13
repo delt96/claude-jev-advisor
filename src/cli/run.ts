@@ -33,7 +33,7 @@ const USAGE = [
   '  off [rm] [context]         switch helpers off (open sessions too)',
   '  status                     show what is registered and switched on',
   '  key                        ask for the TypeSafe API key, check it and save it',
-  '  report [--days 7]          list the /compact and /clear advice shown and what followed',
+  '  report [--days 7] [--turns]  list the /compact and /clear advice by episode, what followed, and the rm decisions',
   '',
   'Options for install: --lang ko|en  --key-file <path>  --display mod|statusline|message',
   'The display is set up when context is installed: "install context --display <mode>" switches it.',
@@ -43,6 +43,7 @@ const USAGE = [
 
 const INSTALL_OPTIONS = ['lang', 'key-file', 'display'];
 const REPORT_DAYS = 7;
+const FLAGS = ['turns'];
 const LANGS = ['ko', 'en'];
 const DISPLAYS = ['mod', 'statusline', 'message'];
 
@@ -54,7 +55,9 @@ function parse(argv: string[]): Parsed | string {
   const options: Record<string, string> = {};
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
-    if (arg.startsWith('--')) {
+    if (arg.startsWith('--') && FLAGS.includes(arg.slice(2))) {
+      options[arg.slice(2)] = 'true';
+    } else if (arg.startsWith('--')) {
       const value = rest[i + 1];
       if (value === undefined || value.startsWith('--')) return `${arg} needs a value`;
       options[arg.slice(2)] = value;
@@ -71,7 +74,7 @@ function parse(argv: string[]): Parsed | string {
 function checkOptions(command: string, options: Record<string, string>): string | null {
   const names = Object.keys(options);
   if (command === 'report') {
-    const unknown = names.find((n) => n !== 'days');
+    const unknown = names.find((n) => n !== 'days' && n !== 'turns');
     if (unknown) return `unknown option --${unknown}`;
     return options.days === undefined || /^[1-9]\d{0,3}$/.test(options.days) ? null : '--days takes a whole number of days from 1';
   }
@@ -187,7 +190,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
         for (const line of statusLines(io.home)) io.out(line);
         return 0;
       case 'report':
-        for (const line of reportLines(io.home, io.now(), options.days === undefined ? REPORT_DAYS : Number(options.days))) io.out(line);
+        for (const line of reportLines(io.home, io.now(), options.days === undefined ? REPORT_DAYS : Number(options.days), { turns: options.turns === 'true' })) io.out(line);
         return 0;
       case 'help':
       case '--help':
