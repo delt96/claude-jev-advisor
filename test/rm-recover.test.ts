@@ -141,3 +141,37 @@ test('a git that fails or times out means not recoverable', () => {
     cleanup(root);
   }
 });
+
+for (const bit of ['--assume-unchanged', '--skip-worktree']) {
+  test(`a tracked file with ${bit} and uncommitted edits is not in git`, WINDOWS_ONLY, () => {
+    const repo = makeRepo();
+    try {
+      commit(repo, 'a.md', 'one\n');
+      git(repo, 'update-index', bit, 'a.md');
+      const file = path.join(repo, 'a.md');
+      assert.deepEqual(fileRecovery(file, [], [file]), { lift: 'git' });
+      fs.appendFileSync(file, 'two\n');
+      assert.deepEqual(fileRecovery(file, [], [file]), { lift: null, note: { kind: 'changed', path: 'a.md' } });
+    } finally {
+      cleanup(repo);
+    }
+  });
+}
+
+test('the file reached by another spelling of its own path is not its copy', WINDOWS_ONLY, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-recover-'));
+  try {
+    const dir = path.join(root, 'docs');
+    fs.mkdirSync(dir);
+    const file = path.join(dir, 'n.md');
+    fs.writeFileSync(file, 'same text\n');
+    const link = path.join(root, 'link');
+    fs.symlinkSync(dir, link, 'junction');
+    assert.deepEqual(fileRecovery(file, [path.join(link, 'n.md')], [file]), { lift: null, note: null });
+    const other = path.join(root, 'other.md');
+    fs.writeFileSync(other, 'same text\n');
+    assert.deepEqual(fileRecovery(file, [path.join(link, 'n.md'), other], [file]), { lift: 'copy', copy: other });
+  } finally {
+    cleanup(root);
+  }
+});

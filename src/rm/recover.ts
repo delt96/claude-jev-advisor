@@ -47,12 +47,16 @@ export function sameContent(a: string, b: string): boolean {
 
 const key = (p: string) => win.normalize(p.replace(/\//g, '\\')).replace(/\\+$/, '').toLowerCase();
 
-function insideTarget(candidate: string, targets: string[]): boolean {
-  const c = key(candidate);
-  return targets.some((t) => {
-    const k = key(t);
-    return c === k || c.startsWith(`${k}\\`);
-  });
+function realKey(p: string): string | null {
+  try {
+    return key(fs.realpathSync.native(p));
+  } catch {
+    return null;
+  }
+}
+
+function within(candidate: string, folder: string): boolean {
+  return candidate === folder || candidate.startsWith(`${folder}\\`);
 }
 
 function isRegularFile(p: string): boolean {
@@ -63,9 +67,14 @@ function isRegularFile(p: string): boolean {
   }
 }
 
+// Only real paths decide: a junction, a short name or a trailing dot can reach the file being deleted under another spelling.
 function identicalCopy(file: string, named: string[], targets: string[]): string | null {
+  const own = realKey(file);
+  if (own === null) return null;
+  const blocked = [own, ...targets.map((t) => realKey(t) ?? key(t)), ...targets.map(key)];
   for (const copy of named) {
-    if (key(copy) === key(file) || insideTarget(copy, targets)) continue;
+    const real = realKey(copy);
+    if (real === null || real === own || blocked.some((t) => within(real, t) || within(key(copy), t))) continue;
     if (isRegularFile(copy) && sameContent(file, copy)) return copy;
   }
   return null;
@@ -76,10 +85,12 @@ function gitRecovery(file: string, git: GitRunner): { inGit: boolean; note: Reco
   const dir = win.dirname(file);
   const base = win.basename(file);
   const spec = `:(literal)${base}`;
-  const listed = git(['-C', dir, 'ls-files', '-z', '--', spec], ICASE);
+  const listed = git(['-C', dir, 'ls-files', '-v', '-z', '--', spec], ICASE);
   if (listed.status !== 0) return null;
-  const tracked = listed.stdout !== '';
-  if (tracked) {
+  const tags = listed.stdout.split('\0').filter((entry) => entry !== '').map((entry) => entry[0]);
+  const tracked = tags.length > 0;
+  // Assume-unchanged (lowercase) and skip-worktree (S) entries are never compared with the working file, so a clean status proves nothing.
+  if (tracked && tags.every((tag) => tag === 'H')) {
     const state = git(['-C', dir, 'status', '--porcelain', '-z', '--ignored', '--', spec], ICASE);
     if (state.status === 0 && state.stdout === '') return { inGit: true, note: null };
   }
