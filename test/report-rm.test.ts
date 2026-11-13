@@ -96,7 +96,22 @@ test('a refused ask, an ask with no result, and a deleted session are named', ()
   assert.match(find(lines, '10:00'), /-> no answer$/);
   assert.match(find(lines, '11:00'), /-> session deleted$/);
   assert.match(find(lines, '12:00'), /-> transcript not found$/);
-  assert.ok(lines.includes('  asked: approved 0, refused 1, no answer 1; wait median 15s, over 10 min 0'));
+  assert.ok(lines.includes('  asked: approved 0, refused 1, no answer 1, session deleted 1, transcript not found 1; wait median 15s, over 10 min 0'));
+});
+
+test('an ask without a tool use id is matched to a command the log cut at 2,000 characters or redacted', () => {
+  const home = newHome();
+  const long = `rm ${'a'.repeat(2500)}`;
+  const keyed = 'rm out.json --token ts-test-key-0123456789 --force';
+  const main = writeJsonl(path.join(home, 'transcripts', 'sess-rm-0001.jsonl'), [
+    toolUse(at(9), 'tu-1', long),
+    toolResult(at(9, 0, 20), 'tu-1'),
+    toolUse(at(10), 'tu-2', keyed),
+    toolResult(at(10, 0, 30), 'tu-2'),
+  ]);
+  assert.deepEqual(askAnswer(rmRecord(at(9), { transcriptPath: main, command: long.slice(0, 2000) })), { kind: 'approved', waitMs: 20 * 1000 });
+  assert.deepEqual(askAnswer(rmRecord(at(10), { transcriptPath: main, command: 'rm out.json --token [redacted] --force' })), { kind: 'approved', waitMs: 30 * 1000 });
+  assert.deepEqual(askAnswer(rmRecord(at(10), { transcriptPath: main, command: 'rm other.json --token [redacted] --force' })), { kind: 'no_answer', waitMs: null });
 });
 
 test('askAnswer reports the kind and the wait', () => {
@@ -110,11 +125,12 @@ test('records from 0.5.1 count as Jev lifts and asks', () => {
   const home = newHome();
   logOf(home, [
     { at: at(9), helper: 'rm', event: 'pre_tool_use', sessionId: 'sess-rm-0001', decision: 'pass', targets: [{ shown: 'out.json', p: 0.93 }], jev: [] },
-    { at: at(10), helper: 'rm', event: 'pre_tool_use', sessionId: 'sess-rm-0001', decision: 'ask', targets: [{ shown: 'notes.md', p: 0.3 }] },
+    { at: at(10), helper: 'rm', event: 'pre_tool_use', sessionId: 'sess-rm-0001', decision: 'ask', targets: [{ shown: 'C:\\p\\notes.md', p: 0.3 }, { shown: 'C:\\p\\out.log', p: 0.2 }] },
   ]);
   const lines = rmReportLines(home, NOW, 7);
   assert.ok(lines.includes('  lifted 1: Jev 1 · asked 1 · blocked 0'));
   assert.match(find(lines, '09:00'), /out\.json \(Jev 0\.93\)$/);
+  assert.match(find(lines, '10:00'), /sess-rm- {2}notes\.md, out\.log {2}-> transcript not found$/);
 });
 
 test('long lists stop at twenty lines', () => {

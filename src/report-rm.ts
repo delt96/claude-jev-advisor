@@ -3,6 +3,7 @@ import path from 'node:path';
 import { parseLines, type Entry } from './context/transcript.js';
 import { readLogRecords, type LogRecord } from './log-records.js';
 import { localTime, transcriptGone } from './report.js';
+import { RM_LOG_COMMAND_CHARS } from './rm/run.js';
 
 export const LIST_LINES = 20;
 export const ANSWER_WINDOW_MS = 10 * 60 * 1000;
@@ -21,6 +22,7 @@ const SKIP_NAMES: [string, string][] = [
   ['whatif', '-WhatIf'],
 ];
 const ASK_PREFIX = '실제 파일 삭제: ';
+const REDACTED = '[redacted]';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -76,6 +78,14 @@ function isRefusal(entry: Entry, block: Record<string, unknown>): boolean {
   return block.is_error === true && blockText(block).includes("doesn't want to proceed");
 }
 
+// The log keeps a command cut to its first characters with API keys replaced, and the keys are not known here, so a
+// redacted command matches by its text before the first redaction.
+function loggedAs(called: string, logged: unknown): boolean {
+  if (typeof logged !== 'string') return false;
+  const redacted = logged.indexOf(REDACTED);
+  return redacted === -1 ? called.slice(0, RM_LOG_COMMAND_CHARS) === logged : called.startsWith(logged.slice(0, redacted));
+}
+
 export function askAnswer(record: LogRecord, cache: EntryCache = new Map()): AskAnswer {
   const entries = transcriptEntries(record, cache);
   if (!entries) {
@@ -89,7 +99,7 @@ export function askAnswer(record: LogRecord, cache: EntryCache = new Map()): Ask
     for (const entry of entries) {
       const time = timeOf(entry.timestamp);
       if (!Number.isNaN(askedAt) && !(time >= askedAt - LOOKBACK_MS && time <= askedAt + ANSWER_WINDOW_MS)) continue;
-      const call = contentOf(entry).find((c) => c.type === 'tool_use' && (c.name === 'Bash' || c.name === 'PowerShell') && isRecord(c.input) && c.input.command === record.command);
+      const call = contentOf(entry).find((c) => c.type === 'tool_use' && (c.name === 'Bash' || c.name === 'PowerShell') && isRecord(c.input) && typeof c.input.command === 'string' && loggedAs(c.input.command, record.command));
       const distance = Number.isNaN(askedAt) ? 0 : Math.abs(time - askedAt);
       if (call && typeof call.id === 'string' && distance < best) {
         id = call.id;
@@ -188,11 +198,13 @@ export function rmReportLines(home: string, now: Date, days: number): string[] {
     const count = (kind: AskAnswer['kind']) => answers.filter((a) => a.kind === kind).length;
     const waits = answers.map((a) => a.waitMs).filter((w): w is number => w !== null);
     const mid = median(waits);
-    lines.push(`  asked: approved ${count('approved')}, refused ${count('refused')}, no answer ${count('no_answer')}; wait median ${mid === null ? '-' : duration(mid)}, over 10 min ${waits.filter((w) => w > LONG_WAIT_MS).length}`);
+    const unanswerable = (['deleted', 'unknown'] as const).flatMap((kind) => (count(kind) ? [`, ${answerText({ kind, waitMs: null })} ${count(kind)}`] : []));
+    lines.push(`  asked: approved ${count('approved')}, refused ${count('refused')}, no answer ${count('no_answer')}${unanswerable.join('')}; wait median ${mid === null ? '-' : duration(mid)}, over 10 min ${waits.filter((w) => w > LONG_WAIT_MS).length}`);
     lines.push(
       ...capped(
         asked.map((r, i) => {
-          const reason = typeof r.reason === 'string' ? r.reason.replace(ASK_PREFIX, '') : '';
+          // Records from 0.5.1 have no reason, only the targets.
+          const reason = typeof r.reason === 'string' ? r.reason.replace(ASK_PREFIX, '') : targetsOf(r).map((t) => nameOf(t.shown)).join(', ');
           return `${stamp(r)}${reason}  -> ${answerText(answers[i])}`;
         }),
       ),
