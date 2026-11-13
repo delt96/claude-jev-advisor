@@ -1,12 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ICASE, runGit, type GitRunner } from './git.js';
+import { BUILD_DIRS } from './targets.js';
 
 export type RecoveryNote = { kind: 'untracked' | 'changed' | 'unmerged' | 'repository'; path?: string };
 export type Recovery = { lift: 'git' } | { lift: 'copy'; copy: string } | { lift: null; note: RecoveryNote | null };
 
 export const MAX_NAMED_PATHS = 30;
 export const MAX_COPY_BYTES = 2 * 1024 * 1024;
+export const MAX_CONTAINER_CHILDREN = 10;
 
 const win = path.win32;
 const WORD = /"([^"]*)"|'([^']*)'|([^\s;|&()<>"']+)/g;
@@ -108,4 +110,99 @@ export function fileRecovery(file: string, named: string[], targets: string[], g
   const copy = identicalCopy(file, named, targets);
   if (copy !== null) return { lift: 'copy', copy };
   return { lift: null, note: viaGit?.note ?? null };
+}
+
+const NOT_LIFTED: Recovery = { lift: null, note: null };
+
+const entries = (stdout: string) => stdout.split('\0').filter((entry) => entry !== '');
+
+function isFile(p: string): boolean {
+  try {
+    return fs.lstatSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isDirectory(p: string): boolean {
+  try {
+    return fs.lstatSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function insideRecovery(dir: string, prefix: string, git: GitRunner): Recovery {
+  const status = git(['-C', dir, 'status', '--porcelain', '-z', '--ignored', '--untracked-files=normal', '--', '.'], ICASE);
+  if (status.status !== 0) return NOT_LIFTED;
+  const list = entries(status.stdout);
+  for (let i = 0; i < list.length; i++) {
+    const code = list[i].slice(0, 2);
+    const full = list[i].slice(3);
+    if (/[RC]/.test(code)) i++;
+    const rel = full.startsWith(prefix) ? full.slice(prefix.length) : full;
+    if (code === '!!') {
+      if (!rel.split('/').some((segment) => BUILD_DIRS.has(segment.toLowerCase()))) return { lift: null, note: { kind: 'untracked', path: rel } };
+      continue;
+    }
+    return { lift: null, note: { kind: code === '??' ? 'untracked' : 'changed', path: rel } };
+  }
+  // Assume-unchanged (lowercase) and skip-worktree (S) entries hide edits from status, so any tag but H keeps the folder.
+  const tagged = git(['-C', dir, 'ls-files', '-v', '-z', '--', '.'], ICASE);
+  if (tagged.status !== 0) return NOT_LIFTED;
+  const hidden = entries(tagged.stdout).find((entry) => entry[0] !== 'H');
+  if (hidden !== undefined) return { lift: null, note: { kind: 'changed', path: hidden.slice(2) } };
+  return { lift: 'git' };
+}
+
+function worktreeRecovery(dir: string, git: GitRunner): Recovery {
+  const own = git(['-C', dir, 'symbolic-ref', '-q', 'HEAD']).stdout.trim();
+  const refs = git(['-C', dir, 'for-each-ref', '--contains', 'HEAD', '--format=%(refname)', 'refs/heads', 'refs/remotes']);
+  if (refs.status !== 0) return NOT_LIFTED;
+  const elsewhere = refs.stdout.split('\n').some((ref) => ref.trim() !== '' && ref.trim() !== own);
+  return elsewhere ? { lift: 'git' } : { lift: null, note: { kind: 'unmerged' } };
+}
+
+function containerRecovery(dir: string, git: GitRunner): Recovery {
+  let children: fs.Dirent[];
+  try {
+    children = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return NOT_LIFTED;
+  }
+  if (children.length > MAX_CONTAINER_CHILDREN) return NOT_LIFTED;
+  for (const child of children) {
+    const full = win.join(dir, child.name);
+    if (!child.isDirectory()) return { lift: null, note: { kind: 'untracked', path: child.name } };
+    let empty: boolean;
+    try {
+      empty = fs.readdirSync(full).length === 0;
+    } catch {
+      return NOT_LIFTED;
+    }
+    if (empty) continue;
+    const inner = isFile(win.join(full, '.git')) ? folderRecovery(full, git) : { lift: null, note: { kind: 'untracked', path: '' } } as Recovery;
+    if (inner.lift === 'git') continue;
+    if (inner.lift === null && inner.note !== null) return { lift: null, note: { ...inner.note, path: `${child.name}${inner.note.path ? `/${inner.note.path}` : ''}` } };
+    return NOT_LIFTED;
+  }
+  return { lift: 'git' };
+}
+
+export function folderRecovery(dir: string, git: GitRunner = runGit): Recovery {
+  try {
+    if (isDirectory(win.join(dir, '.git'))) return { lift: null, note: { kind: 'repository' } };
+    const probe = git(['-C', dir, 'rev-parse', '--is-inside-work-tree', '--show-prefix']);
+    if (probe.status === 0) {
+      const [inside, prefix = ''] = probe.stdout.split('\n');
+      if (inside !== 'true') return NOT_LIFTED;
+      const viaStatus = insideRecovery(dir, prefix.trim(), git);
+      if (viaStatus.lift !== 'git' || !isFile(win.join(dir, '.git'))) return viaStatus;
+      return worktreeRecovery(dir, git);
+    }
+    if (probe.status !== 128 || !/not a git repository/i.test(probe.stderr) || isFile(win.join(dir, '.git'))) return NOT_LIFTED;
+    return containerRecovery(dir, git);
+  } catch {
+    return NOT_LIFTED;
+  }
 }

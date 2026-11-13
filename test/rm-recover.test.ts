@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { MAX_COPY_BYTES, MAX_NAMED_PATHS, fileRecovery, namedPaths, sameContent } from '../src/rm/recover.js';
+import { MAX_COPY_BYTES, MAX_NAMED_PATHS, fileRecovery, folderRecovery, namedPaths, sameContent } from '../src/rm/recover.js';
 
 const WINDOWS_ONLY = { skip: process.platform !== 'win32' && 'the rm helper runs on Windows only' };
 
@@ -173,5 +173,158 @@ test('the file reached by another spelling of its own path is not its copy', WIN
     assert.deepEqual(fileRecovery(file, [path.join(link, 'n.md'), other], [file]), { lift: 'copy', copy: other });
   } finally {
     cleanup(root);
+  }
+});
+
+const write = (file: string, text = 'x') => {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+};
+
+test('a clean folder inside a repository is in git, also with ignored build output', WINDOWS_ONLY, () => {
+  const repo = makeRepo();
+  try {
+    commit(repo, '.gitignore', 'node_modules/\n');
+    commit(repo, 'src/a.ts', 'a');
+    write(path.join(repo, 'src', 'node_modules', 'x', 'i.js'));
+    fs.mkdirSync(path.join(repo, 'empty'));
+    assert.deepEqual(folderRecovery(path.join(repo, 'src')), { lift: 'git' });
+    assert.deepEqual(folderRecovery(path.join(repo, 'empty')), { lift: 'git' });
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('an untracked file, a change or an ignored file outside build folders keeps the folder, and names the first one', WINDOWS_ONLY, () => {
+  const repo = makeRepo();
+  try {
+    commit(repo, 'src/a.ts', 'a');
+    const src = path.join(repo, 'src');
+    write(path.join(src, 'new.ts'));
+    assert.deepEqual(folderRecovery(src), { lift: null, note: { kind: 'untracked', path: 'new.ts' } });
+    fs.rmSync(path.join(src, 'new.ts'));
+    write(path.join(src, 'a.ts'), 'changed');
+    assert.deepEqual(folderRecovery(src), { lift: null, note: { kind: 'changed', path: 'a.ts' } });
+    git(repo, 'checkout', '--', 'src/a.ts');
+    commit(repo, '.gitignore', '.env.local\n');
+    write(path.join(src, '.env.local'));
+    assert.deepEqual(folderRecovery(src), { lift: null, note: { kind: 'untracked', path: '.env.local' } });
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('a tracked file hidden by assume-unchanged or skip-worktree keeps the folder', WINDOWS_ONLY, () => {
+  const repo = makeRepo();
+  try {
+    commit(repo, 'src/a.ts', 'a');
+    commit(repo, 'src/b.ts', 'b');
+    git(repo, 'update-index', '--assume-unchanged', 'src/a.ts');
+    write(path.join(repo, 'src', 'a.ts'), 'edited');
+    assert.deepEqual(folderRecovery(path.join(repo, 'src')), { lift: null, note: { kind: 'changed', path: 'a.ts' } });
+    git(repo, 'update-index', '--no-assume-unchanged', 'src/a.ts');
+    git(repo, 'update-index', '--skip-worktree', 'src/b.ts');
+    git(repo, 'checkout', '--', 'src/a.ts');
+    assert.deepEqual(folderRecovery(path.join(repo, 'src')), { lift: null, note: { kind: 'changed', path: 'b.ts' } });
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('Korean names are read correctly', WINDOWS_ONLY, () => {
+  const repo = makeRepo();
+  try {
+    commit(repo, 'src/설계.md', 'a');
+    const src = path.join(repo, 'src');
+    assert.deepEqual(folderRecovery(src), { lift: 'git' });
+    write(path.join(src, '메모.md'));
+    assert.deepEqual(folderRecovery(src), { lift: null, note: { kind: 'untracked', path: '메모.md' } });
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('a folder with its own repository is never lifted', WINDOWS_ONLY, () => {
+  const repo = makeRepo();
+  try {
+    commit(repo, 'a.txt', 'a');
+    assert.deepEqual(folderRecovery(repo), { lift: null, note: { kind: 'repository' } });
+  } finally {
+    cleanup(repo);
+  }
+});
+
+function addWorktree(repo: string, name: string, ...args: string[]) {
+  const wt = path.join(path.dirname(repo), `${path.basename(repo)}-${name}`);
+  git(repo, 'worktree', 'add', '-q', ...args.map((a) => (a === '<wt>' ? wt : a)));
+  return wt;
+}
+
+test('a merged linked worktree is in git; an unmerged one is not', WINDOWS_ONLY, () => {
+  const repo = makeRepo();
+  let wt = '';
+  let detached = '';
+  try {
+    commit(repo, 'a.txt', 'a');
+    wt = addWorktree(repo, 'feat', '-b', 'feat', '<wt>', 'main');
+    commit(wt, 'b.txt', 'b');
+    assert.deepEqual(folderRecovery(wt), { lift: null, note: { kind: 'unmerged' } });
+    git(repo, 'merge', '-q', 'feat');
+    assert.deepEqual(folderRecovery(wt), { lift: 'git' });
+    detached = addWorktree(repo, 'det', '--detach', '<wt>', 'main');
+    assert.deepEqual(folderRecovery(detached), { lift: 'git' });
+  } finally {
+    cleanup(wt, detached, repo);
+  }
+});
+
+test('a folder outside git that holds only merged worktrees is in git; a stray file keeps it', WINDOWS_ONLY, () => {
+  const repoA = makeRepo();
+  const repoB = makeRepo();
+  const box = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-recover-'));
+  try {
+    for (const [repo, name] of [[repoA, 'one'], [repoB, 'two']]) {
+      commit(repo, 'a.txt', 'a');
+      const wt = path.join(box, name);
+      git(repo, 'worktree', 'add', '-q', '-b', `feat-${name}`, wt, 'main');
+    }
+    fs.mkdirSync(path.join(box, 'empty'));
+    assert.deepEqual(folderRecovery(box), { lift: 'git' });
+    write(path.join(box, 'notes.txt'));
+    assert.deepEqual(folderRecovery(box), { lift: null, note: { kind: 'untracked', path: 'notes.txt' } });
+    fs.rmSync(path.join(box, 'notes.txt'));
+    write(path.join(box, 'one', 'extra.txt'));
+    assert.deepEqual(folderRecovery(box), { lift: null, note: { kind: 'untracked', path: 'one/extra.txt' } });
+    fs.rmSync(path.join(box, 'one', 'extra.txt'));
+    for (let i = 0; i < 9; i++) fs.mkdirSync(path.join(box, `e${i}`));
+    assert.deepEqual(folderRecovery(box), { lift: null, note: null });
+  } finally {
+    cleanup(box, repoA, repoB);
+  }
+});
+
+test('a junction child of a container is not a folder to lift', WINDOWS_ONLY, () => {
+  const box = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-recover-'));
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), 'cja-recover-'));
+  try {
+    fs.symlinkSync(target, path.join(box, 'link'), 'junction');
+    assert.deepEqual(folderRecovery(box), { lift: null, note: { kind: 'untracked', path: 'link' } });
+  } finally {
+    fs.rmSync(path.join(box, 'link'), { force: true, recursive: false });
+    cleanup(box, target);
+  }
+});
+
+test('a worktree whose main repository is gone is not lifted', WINDOWS_ONLY, () => {
+  const repo = makeRepo();
+  const moved = `${repo}-moved`;
+  let wt = '';
+  try {
+    commit(repo, 'a.txt', 'a');
+    wt = addWorktree(repo, 'feat', '-b', 'feat', '<wt>', 'main');
+    fs.renameSync(repo, moved);
+    assert.equal(folderRecovery(wt).lift, null);
+  } finally {
+    cleanup(wt, repo, moved);
   }
 });
